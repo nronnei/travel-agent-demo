@@ -3,6 +3,7 @@ import { Alert, Box, Card, Spinner, Stack, Text } from '@chakra-ui/react';
 import {
   BASE_INTERESTS,
   BRIEF_CONFIRMED_MESSAGE,
+  CONVERSATION_KEY_HEADER,
   INTAKE_GREETING,
   IntakeComponent,
   IntakeComponentDataSchema,
@@ -33,10 +34,11 @@ import { confirmTrip, saveIdentity } from './intakeApi';
 // The Nest API proxies this to the Inkeep run API, adding auth server-side.
 // Inkeep keeps its own history and reads only the newest user message, and the
 // scripted intake messages exist only in this browser, so send just the new turn.
+// Per-request headers (the conversation key) and body (`brief`) pass through.
 const transport = new DefaultChatTransport({
   api: '/api/chat',
-  prepareSendMessagesRequest: ({ id, messages }) => ({
-    body: { id, messages: messages.slice(-1) },
+  prepareSendMessagesRequest: ({ id, messages, body }) => ({
+    body: { ...body, id, messages: messages.slice(-1) },
   }),
 });
 
@@ -224,7 +226,13 @@ export function Chat() {
     clearError,
   } = useChat({ transport });
   const [step, setStep] = useState<Step>({ kind: 'name' });
+  // Issued by the API when the guest's identity is first stored; proves this
+  // browser owns the conversation on every later intake and chat request.
+  const conversationKey = useRef<string>(undefined);
   const [edit, setEdit] = useState<Edit | null>(null);
+  // A brief the guest edited here, in the app, that the agent hasn't seen yet.
+  // It goes along with their next message so the agent builds on it.
+  const [editedBrief, setEditedBrief] = useState<TripBriefProps | null>(null);
   const [placeholder, setPlaceholder] = useState<string>();
   const [typing, setTyping] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -260,16 +268,26 @@ export function Chat() {
     append(localMessage('user', [textPart(text)]));
   }
 
-  /** A turn for the intake/planner agents. */
-  function send(text: string) {
+  /** A turn for the intake/planner agents, with any brief edits they haven't seen. */
+  function send(text: string, brief = editedBrief) {
     if (!text || busy) return;
     clearError();
     setLocalError(null);
     setPlaceholder(undefined);
-    void sendMessage({ text });
+    setEditedBrief(null);
+    const key = conversationKey.current;
+    void sendMessage(
+      { text },
+      {
+        headers: key ? { [CONVERSATION_KEY_HEADER]: key } : undefined,
+        body: brief ? { brief } : undefined,
+      },
+    );
   }
 
+  /** Shows a brief the guest edited locally (no agent turn). */
   function showBrief(brief: TripBriefProps) {
+    setEditedBrief(brief);
     reply(
       textPart(UPDATED_BRIEF),
       componentPart({ name: IntakeComponent.TripBrief, props: brief }),
@@ -298,7 +316,9 @@ export function Chat() {
     setSaving(true);
     try {
       // Stored before the first agent turn: the agents read the name from here.
-      await saveIdentity(chatId, identity);
+      conversationKey.current =
+        (await saveIdentity(chatId, identity, conversationKey.current)) ??
+        conversationKey.current;
       setStep({ kind: 'agent' });
       reply(textPart(destinationQuestion(formalAddress(identity))));
     } catch (err) {
@@ -317,16 +337,26 @@ export function Chat() {
     }
   }
 
-  function onText(text: string) {
+  /** Returns false to keep the text in the composer (it was rejected). */
+  function onText(text: string): boolean {
     if (edit && edit.field !== 'interests') {
       const brief = { ...edit.brief, [edit.field]: text };
-      if (!TripBriefPropsSchema.safeParse(brief).success) return;
+      if (!TripBriefPropsSchema.safeParse(brief).success) {
+        setLocalError(
+          `Please enter the ${edit.field} in full, up to 200 characters.`,
+        );
+        return false;
+      }
       setEdit(null);
+      setLocalError(null);
       say(editAnswer(edit.field, text));
       showBrief(brief);
-      return;
+      return true;
     }
+    // Typing instead of using the re-offered interest picker ends that edit.
+    setEdit(null);
     send(text);
+    return true;
   }
 
   const handlers: IntakeHandlers = {
@@ -368,10 +398,11 @@ export function Chat() {
       setEdit(null);
       setSaving(true);
       try {
-        // The planner reads the confirmed brief from the API, not from the chat.
-        await confirmTrip(chatId, brief);
+        // The planner reads the confirmed brief from the API, not from the chat,
+        // so no edit note: the intake agent expects this message verbatim.
+        await confirmTrip(chatId, brief, conversationKey.current);
         setSaving(false);
-        send(BRIEF_CONFIRMED_MESSAGE);
+        send(BRIEF_CONFIRMED_MESSAGE, null);
       } catch (err) {
         setSaving(false);
         setLocalError(err instanceof Error ? err.message : String(err));

@@ -1,4 +1,13 @@
 {{- $ctx := dict "root" . "component" "api" "values" .Values.api -}}
-{{ include "travel-agent.deployment" (merge (dict "env" (dict "PORT" .Values.api.containerPort)) $ctx) }}
+{{- $env := dict "PORT" .Values.api.containerPort -}}
+{{- with .Values.inkeep -}}
+{{- if .apiUrl -}}
+{{- $_ := set $env "INKEEP_AGENTS_API_URL" .apiUrl -}}
+{{- end -}}
+{{- $_ := set $env "INKEEP_TENANT_ID" .tenantId -}}
+{{- $_ := set $env "INKEEP_PROJECT_ID" .projectId -}}
+{{- $_ := set $env "INKEEP_AGENT_ID" .agentId -}}
+{{- end -}}
+{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.inkeep.existingSecret) $ctx) }}
 ---
 {{ include "travel-agent.service" $ctx }}

@@ -82,6 +82,7 @@ Collect, in this order:
 - Only emit the ${TripBrief} once the guest has actually told you their destination and purpose (and picked interests, if you asked). Never fill a field with a placeholder such as "<UNKNOWN>"; if something is missing, ask for it instead.
 - Make sure you have adequately collected all necessary information from the guest before emitting the ${TripBrief} component. When in doubt, make sure to prompt the guest for their interests.
 - If the guest asks to change something in the brief, emit an updated ${TripBrief}.
+- The guest can also edit the brief themselves in the app. Their next message then starts with "[I've edited the trip brief myself. It now reads: …]". That is the current brief and replaces any earlier one: build every later ${TripBrief} from it, and don't mention the note.
 - When the guest says "${BRIEF_CONFIRMED_MESSAGE}", transfer to the travel planner straight away, without writing anything yourself. (Brief confirmed by the guest: ${fromIntake('briefConfirmed')}.)
 
 ${STYLE_AND_TONE}
@@ -89,27 +90,12 @@ ${STYLE_AND_TONE}
 ${UNBREAKABLE_RULES}`,
 });
 
-const guardrailEvaluator = subAgent({
-  id: 'geval',
-  name: 'guardrail-evaluator',
-  description:
-    'This agent validates that responses from the primary agent. It ensures nobody is abusing our tokens.',
-  models: {
-    base: { model: 'anthropic/claude-haiku-4-5' },
-  },
-  prompt: `## Purpose
-You are an enforcer. You make sure that our agents only function within their proposed scope by checking their output before the send it back to the user.
-
-## Unbreakable rules
-- We are a virtual travel agency. We only answer travel questions. If the output shared with you contains any answers to questions unrelated to travel, you must instruct the primary agent to`,
-});
-
 export const travelAgent = agent({
   id: 'travel-agent',
   name: 'Travel agent',
   description: 'Conversational travel planning assistant',
   defaultSubAgent: intake,
-  subAgents: () => [intake, planner, guardrailEvaluator],
+  subAgents: () => [intake, planner],
   contextConfig: intakeContext,
   stopWhen: {
     transferCountIs: 10,

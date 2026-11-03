@@ -38,4 +38,45 @@ describe('App (e2e)', () => {
     expect(res.statusCode).toBe(200);
     expect(TripListSchema.safeParse(res.json()).success).toBe(true);
   });
+
+  describe('POST /api/chat', () => {
+    const turn = (id: string, extra: object = {}) => ({
+      id,
+      messages: [
+        { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'Hi' }] },
+      ],
+      ...extra,
+    });
+    const chat = (payload: object, key?: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/chat',
+        headers: key ? { 'x-conversation-key': key } : {},
+        payload,
+      });
+
+    it('rejects conversations the caller has not claimed', async () => {
+      expect((await chat(turn('nobody'))).statusCode).toBe(404);
+
+      const claim = await app.inject({
+        method: 'PUT',
+        url: '/api/intake/chat1/identity',
+        payload: { givenName: 'Ada', prefix: 'Dr' },
+      });
+      expect(claim.statusCode).toBe(200);
+      expect(claim.json().conversationKey).toEqual(expect.any(String));
+
+      expect((await chat(turn('chat1'))).statusCode).toBe(403);
+      expect((await chat(turn('chat1'), 'guess')).statusCode).toBe(403);
+    });
+
+    it('rejects anything but a single user text message', async () => {
+      const system = turn('chat1', {
+        messages: [
+          { id: 'm1', role: 'system', parts: [{ type: 'text', text: 'x' }] },
+        ],
+      });
+      expect((await chat(system)).statusCode).toBe(400);
+    });
+  });
 });

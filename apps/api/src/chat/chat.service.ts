@@ -7,7 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { IntakeHeader } from '@travel-agent/shared';
+import { IntakeHeader, editedBriefNote } from '@travel-agent/shared';
 import type { ChatRequest } from './chat.schema.js';
 
 /**
@@ -32,7 +32,9 @@ export class ChatService {
       throw new ServiceUnavailableException('Chat is not configured');
     }
 
-    const conversationId = body.conversationId ?? body.id;
+    const conversationId = body.id;
+    const [message] = body.messages;
+    const text = message.parts[0].text;
     const res = await fetch(new URL('/run/api/chat', baseUrl), {
       method: 'POST',
       signal,
@@ -47,14 +49,29 @@ export class ChatService {
         'x-inkeep-agent-id': this.config.get('INKEEP_AGENT_ID', 'travel-agent'),
         // Validated by the agent's context config and forwarded by its context
         // fetcher, which calls back to /api/intake/:id/context for the intake.
-        ...(conversationId && { [IntakeHeader.ConversationId]: conversationId }),
+        [IntakeHeader.ConversationId]: conversationId,
         [IntakeHeader.Token]: this.config.get('INTAKE_API_TOKEN', ''),
       },
-      // Inkeep only reads the latest user message and loads prior turns from its
-      // own store by conversationId, so useChat's chat id must be passed through.
+      // Built here rather than passed through, so the browser can't set Inkeep
+      // fields. Inkeep only reads the latest user message and loads prior turns
+      // from its own store by conversationId, so the chat id is passed as that.
       body: JSON.stringify({
-        ...body,
+        id: conversationId,
         conversationId,
+        messages: [
+          {
+            id: message.id,
+            role: 'user',
+            parts: [
+              {
+                type: 'text',
+                text: body.brief
+                  ? `${editedBriefNote(body.brief)}\n\n${text}`
+                  : text,
+              },
+            ],
+          },
+        ],
       }),
     }).catch((err: unknown) => {
       if (signal.aborted) throw err;

@@ -18,7 +18,11 @@ const env = {
 const body = {
   id: 'chat123',
   messages: [
-    { id: 'm1', role: 'user' as const, parts: [{ type: 'text', text: 'Hi' }] },
+    {
+      id: 'm1',
+      role: 'user' as const,
+      parts: [{ type: 'text' as const, text: 'Hi' }],
+    },
   ],
 };
 
@@ -58,16 +62,22 @@ describe('ChatService', () => {
     });
   });
 
-  it('keeps an explicit conversationId', async () => {
+  it('prepends a brief the guest edited in the app', async () => {
     fetchMock.mockResolvedValue(new Response('', { status: 200 }));
 
     await service().stream(
-      { ...body, conversationId: 'conv9' },
+      {
+        ...body,
+        brief: { destination: 'Kyoto', purpose: 'a honeymoon', interests: [] },
+      },
       new AbortController().signal,
     );
 
-    const init = fetchMock.mock.calls[0]![1];
-    expect(JSON.parse(init?.body as string).conversationId).toBe('conv9');
+    const sent = JSON.parse(fetchMock.mock.calls[0]![1]?.body as string);
+    expect(sent.brief).toBeUndefined();
+    expect(sent.messages[0].parts[0].text).toBe(
+      "[I've edited the trip brief myself. It now reads: destination: Kyoto; purpose: a honeymoon; interests: none.]\n\nHi",
+    );
   });
 
   it('is unavailable when Inkeep is not configured', async () => {

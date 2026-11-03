@@ -15,8 +15,9 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 openssl genrsa -out "$tmp/priv.pem" 2048 2>/dev/null
 openssl rsa -in "$tmp/priv.pem" -pubout -out "$tmp/pub.pem" 2>/dev/null
-jwt_priv=$(base64 -w0 "$tmp/priv.pem")
-jwt_pub=$(base64 -w0 "$tmp/pub.pem")
+# openssl rather than base64 -w0, which BSD/macOS base64 lacks.
+jwt_priv=$(openssl base64 -A -in "$tmp/priv.pem")
+jwt_pub=$(openssl base64 -A -in "$tmp/pub.pem")
 
 while IFS= read -r line; do
   key=${line%%=*}

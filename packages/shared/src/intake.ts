@@ -219,6 +219,35 @@ export const IntakeHeader = {
   Token: 'x-intake-token',
 } as const;
 
+// ---- Conversation ownership (browser ↔ API) ----
+
+/** useChat ids are short random strings; anything else is rejected before it becomes a key. */
+export const ConversationIdSchema = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,128}$/, 'Invalid conversation id');
+
+/**
+ * Proves the browser owns a conversation. Issued once, when the guest's identity
+ * is first stored, and required on every later intake and chat request.
+ */
+export const CONVERSATION_KEY_HEADER = 'x-conversation-key';
+
+/** Response to the first `PUT /api/intake/:id/identity`. */
+export const ClaimedConversationSchema = z.object({
+  conversationKey: z.string(),
+});
+
+/**
+ * Prepended (by the API) to the next guest message after they edit the brief
+ * themselves, so the intake agent builds on their edits.
+ */
+export function editedBriefNote(brief: TripBriefProps): string {
+  const interests = brief.interests.length
+    ? brief.interests.join(', ')
+    : 'none';
+  return `[I've edited the trip brief myself. It now reads: destination: ${brief.destination}; purpose: ${brief.purpose}; interests: ${interests}.]`;
+}
+
 // ---- The scripted conversation (web app) and the messages it sends ----
 
 /** The concierge's opening line, shown by the web app as the first assistant message. */

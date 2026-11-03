@@ -74,6 +74,9 @@ services:
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
       # No OTEL collector in this stack; keep the exporter from retrying a dead endpoint.
       OTEL_SDK_DISABLED: 'true'
+    # Lets the context fetcher reach an API running on the host (npm run dev) on Linux too.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     ports:
       - '${INKEEP_API_PORT:-3002}:3002'
     depends_on:

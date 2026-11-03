@@ -15,7 +15,9 @@ const intakeHeaders = headers({
 });
 
 // Where Inkeep reaches the Nest API, as seen from the Inkeep container. Read at push time.
-const intakeApiUrl = process.env.INTAKE_API_URL ?? 'http://api:3000';
+// The default is the `npm run dev` setup, where the API runs on the host (see .env.example).
+const intakeApiUrl =
+  process.env.INTAKE_API_URL ?? 'http://host.docker.internal:3000';
 
 const intakeFetcher = fetchDefinition({
   id: 'guest-intake',

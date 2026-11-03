@@ -30,7 +30,8 @@ export function Composer({
   /** Nothing can be sent right now (e.g. waiting on a scripted reply). */
   disabled: boolean;
   onName: (givenName: string, surname: string) => void;
-  onText: (text: string) => void;
+  /** Returns false when the text was rejected, so it stays in the input. */
+  onText: (text: string) => boolean;
   onCancelEdit: () => void;
   onStop: () => void;
 }) {
@@ -58,8 +59,7 @@ export function Composer({
       setGivenName('');
       setSurname('');
     } else {
-      onText(text.trim());
-      setText('');
+      if (onText(text.trim())) setText('');
     }
   }
 
