@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "typescript-sdk": {
+      "source": "inkeep/skills",
+      "sourceType": "github",
+      "skillPath": "skills/typescript-sdk/SKILL.md",
+      "computedHash": "9e7b9435eeac5213e2cb92a8cab6dec08f6140c473adb8ad445f713687664a35"
+    }
+  }
+}

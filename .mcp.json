@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "inkeep-agents": {
+      "type": "http",
+      "url": "https://agents.inkeep.com/mcp"
+    }
+  }
+}

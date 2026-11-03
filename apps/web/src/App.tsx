@@ -1,5 +1,6 @@
 import {
   Alert,
+  Box,
   Card,
   Container,
   Flex,
@@ -11,6 +12,7 @@ import {
 import type { Trip } from '@travel-agent/shared';
 import { useEffect, useState } from 'react';
 import { fetchTrips } from './api.ts';
+import { Chat } from './components/Chat.tsx';
 import { ColorModeButton } from './components/ui/color-mode.tsx';
 
 export default function App() {
@@ -42,6 +44,10 @@ export default function App() {
       )}
 
       {!trips && !error && <Spinner size="lg" />}
+
+      <Box mb="8">
+        <Chat />
+      </Box>
 
       {trips && (
         <SimpleGrid columns={{ base: 1, md: 2 }} gap="4">
