@@ -1,0 +1,16 @@
+# Layered on top of values-homelab.yaml by the Tiltfile. The dev images run
+# watchers as root against live-synced source, so production hardening is off.
+api:
+  securityContext: null
+  resources:
+    limits:
+      memory: 1Gi
+
+web:
+  containerPort: 5173
+  securityContext: null
+  resources:
+    requests:
+      memory: 128Mi
+    limits:
+      memory: 1Gi

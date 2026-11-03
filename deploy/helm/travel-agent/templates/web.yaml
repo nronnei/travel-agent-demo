@@ -1,0 +1,10 @@
+{{- $ctx := dict "root" . "component" "web" "values" .Values.web -}}
+{{- $apiUrl := printf "http://%s:%v" (include "travel-agent.componentName" (dict "root" . "component" "api")) .Values.api.service.port -}}
+{{- $env := dict
+      "API_UPSTREAM" $apiUrl
+      "API_PROXY_TARGET" $apiUrl
+      "VITE_ALLOWED_HOSTS" .Values.ingress.host
+-}}
+{{ include "travel-agent.deployment" (merge (dict "env" $env) $ctx) }}
+---
+{{ include "travel-agent.service" $ctx }}

@@ -1,0 +1,4 @@
+{{- $ctx := dict "root" . "component" "api" "values" .Values.api -}}
+{{ include "travel-agent.deployment" (merge (dict "env" (dict "PORT" .Values.api.containerPort)) $ctx) }}
+---
+{{ include "travel-agent.service" $ctx }}

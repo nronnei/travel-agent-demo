@@ -1,0 +1,69 @@
+nameOverride: ''
+fullnameOverride: ''
+
+imagePullSecrets: []
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+api:
+  replicas: 1
+  image:
+    repository: travel-agent-api
+    tag: latest
+    pullPolicy: Always
+  containerPort: 3000
+  healthPath: /api/health
+  service:
+    port: 3000
+  env: {}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000 # "node" in the official node image
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+web:
+  replicas: 1
+  image:
+    repository: travel-agent-web
+    tag: latest
+    pullPolicy: Always
+  containerPort: 8080
+  healthPath: /
+  service:
+    port: 80
+  env: {}
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 101 # "nginx" in nginx-unprivileged
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: [ALL]
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      memory: 128Mi
+
+ingress:
+  enabled: true
+  className: ''
+  host: travel.example.com
+  annotations: {}
+  tls:
+    enabled: false
+    secretName: ''

@@ -1,0 +1,22 @@
+# Run the production images locally: docker compose up --build
+# Override host ports with API_PORT / WEB_PORT if 3000 or 8080 are taken.
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: runtime
+    ports:
+      - '${API_PORT:-4500}:3000'
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      target: runtime
+    environment:
+      API_UPSTREAM: http://api:3000
+    ports:
+      - '${WEB_PORT:-4510}:8080'
+    depends_on:
+      - api

@@ -1,0 +1,4 @@
+{{- if .Values.ingress.enabled }}
+Travel Agent: http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}
+API health:   http{{ if .Values.ingress.tls.enabled }}s{{ end }}://{{ .Values.ingress.host }}/api/health
+{{- end }}
