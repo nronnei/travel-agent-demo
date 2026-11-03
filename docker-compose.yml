@@ -1,13 +1,35 @@
 # Run the production images locally: docker compose up --build
-# Override host ports with API_PORT / WEB_PORT if 3000 or 8080 are taken.
+# Override host ports with API_PORT / WEB_PORT if 4500 or 4510 are taken.
+#
+# The inkeep-* services are the self-hosted Inkeep agent framework, adapted from
+# https://github.com/inkeep/agents/blob/main/docker-compose.yml. Secrets come
+# from the root .env (run ./scripts/init-env.sh once to generate it).
+# For `npm run dev`, start just the Inkeep stack: docker compose up -d inkeep-agents-manage-ui
+
+x-inkeep-db-urls: &inkeep-db-urls
+  INKEEP_AGENTS_MANAGE_DATABASE_URL: postgresql://appuser:password@inkeep-agents-doltgres-db:5432/inkeep_agents
+  INKEEP_AGENTS_RUN_DATABASE_URL: postgresql://appuser:password@inkeep-agents-postgres-db:5432/inkeep_agents
+  SPICEDB_ENDPOINT: inkeep-agents-spicedb:50051
+  SPICEDB_PRESHARED_KEY: ${SPICEDB_PRESHARED_KEY:?run ./scripts/init-env.sh}
+  SPICEDB_TLS_ENABLED: 'false'
+
 services:
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
       target: runtime
+    environment:
+      INKEEP_AGENTS_API_URL: http://inkeep-agents-api:3002
+      INKEEP_AGENTS_RUN_API_BYPASS_SECRET: ${INKEEP_AGENTS_RUN_API_BYPASS_SECRET}
+      INKEEP_TENANT_ID: ${INKEEP_TENANT_ID:-default}
+      INKEEP_PROJECT_ID: ${INKEEP_PROJECT_ID:-travel-agent}
+      INKEEP_AGENT_ID: ${INKEEP_AGENT_ID:-travel-agent}
+      INTAKE_API_TOKEN: ${INTAKE_API_TOKEN}
     ports:
       - '${API_PORT:-4500}:3000'
+    depends_on:
+      - inkeep-agents-api
 
   web:
     build:
@@ -20,3 +42,155 @@ services:
       - '${WEB_PORT:-4510}:8080'
     depends_on:
       - api
+
+  # Visual builder: http://localhost:3001 (login: INKEEP_AGENTS_MANAGE_UI_USERNAME/PASSWORD)
+  inkeep-agents-manage-ui:
+    image: inkeep/agents-manage-ui:${INKEEP_VERSION:-0.80.4}
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      INKEEP_AGENTS_API_URL: http://inkeep-agents-api:3002
+      PUBLIC_INKEEP_AGENTS_API_URL: http://localhost:${INKEEP_API_PORT:-3002}
+    ports:
+      - '${INKEEP_UI_PORT:-3001}:3000'
+    depends_on:
+      - inkeep-agents-api
+
+  # Manage API (used by `inkeep push`) and Run API (/run/api/chat).
+  inkeep-agents-api:
+    image: inkeep/agents-api:${INKEEP_VERSION:-0.80.4}
+    environment:
+      <<: *inkeep-db-urls
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      INKEEP_AGENTS_MANAGE_UI_URL: http://localhost:${INKEEP_UI_PORT:-3001}
+      INKEEP_AGENTS_API_URL: http://localhost:${INKEEP_API_PORT:-3002}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in .env}
+      INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET: ${INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET}
+      INKEEP_AGENTS_RUN_API_BYPASS_SECRET: ${INKEEP_AGENTS_RUN_API_BYPASS_SECRET}
+      INKEEP_AGENTS_JWT_SIGNING_SECRET: ${INKEEP_AGENTS_JWT_SIGNING_SECRET}
+      INKEEP_AGENTS_TEMP_JWT_PRIVATE_KEY: ${INKEEP_AGENTS_TEMP_JWT_PRIVATE_KEY}
+      INKEEP_AGENTS_TEMP_JWT_PUBLIC_KEY: ${INKEEP_AGENTS_TEMP_JWT_PUBLIC_KEY}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      # No OTEL collector in this stack; keep the exporter from retrying a dead endpoint.
+      OTEL_SDK_DISABLED: 'true'
+    # Lets the context fetcher reach an API running on the host (npm run dev) on Linux too.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    ports:
+      - '${INKEEP_API_PORT:-3002}:3002'
+    depends_on:
+      inkeep-agents-doltgres-db:
+        condition: service_healthy
+      inkeep-agents-postgres-db:
+        condition: service_healthy
+      inkeep-agents-migrate:
+        condition: service_completed_successfully
+      inkeep-agents-spicedb:
+        condition: service_started
+
+  # One-shot: runs DB migrations and creates the admin user / default tenant.
+  inkeep-agents-migrate:
+    image: inkeep/agents-migrate:${INKEEP_VERSION:-0.80.4}
+    environment:
+      <<: *inkeep-db-urls
+      ENVIRONMENT: ${ENVIRONMENT:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      TENANT_ID: ${INKEEP_TENANT_ID:-default}
+      INKEEP_AGENTS_MANAGE_UI_USERNAME: ${INKEEP_AGENTS_MANAGE_UI_USERNAME}
+      INKEEP_AGENTS_MANAGE_UI_PASSWORD: ${INKEEP_AGENTS_MANAGE_UI_PASSWORD}
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+    depends_on:
+      inkeep-agents-doltgres-db:
+        condition: service_healthy
+      inkeep-agents-postgres-db:
+        condition: service_healthy
+      inkeep-agents-spicedb:
+        condition: service_healthy
+    restart: 'no'
+
+  inkeep-agents-doltgres-db:
+    image: dolthub/doltgresql:0.56.7
+    restart: unless-stopped
+    environment:
+      DOLTGRES_USER: appuser
+      DOLTGRES_PASSWORD: password
+      DOLTGRES_DB: inkeep_agents
+    volumes:
+      - inkeep-agents-doltgres-data:/var/lib/doltgres
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          "PGPASSWORD=password psql -h localhost -U appuser -d inkeep_agents -c 'SELECT 1' || exit 1",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  inkeep-agents-postgres-db:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: inkeep_agents
+      POSTGRES_USER: appuser
+      POSTGRES_PASSWORD: password
+    volumes:
+      - inkeep-agents-postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U appuser -d inkeep_agents']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  inkeep-agents-spicedb:
+    image: authzed/spicedb:v1.49.2
+    command: serve
+    restart: unless-stopped
+    environment:
+      SPICEDB_GRPC_PRESHARED_KEY: ${SPICEDB_PRESHARED_KEY}
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://spicedb:spicedb@inkeep-agents-spicedb-postgres-db:5432/spicedb?sslmode=disable
+      SPICEDB_HTTP_ENABLED: 'true'
+      SPICEDB_TELEMETRY_ENDPOINT: ''
+      SPICEDB_METRICS_ENABLED: 'false'
+    healthcheck:
+      test: ['CMD', 'grpc_health_probe', '-addr=:50051']
+      interval: 5s
+      timeout: 30s
+      retries: 10
+    depends_on:
+      inkeep-agents-spicedb-migrate:
+        condition: service_completed_successfully
+
+  inkeep-agents-spicedb-migrate:
+    image: authzed/spicedb:v1.49.2
+    command: migrate head
+    restart: 'no'
+    environment:
+      SPICEDB_DATASTORE_ENGINE: postgres
+      SPICEDB_DATASTORE_CONN_URI: postgres://spicedb:spicedb@inkeep-agents-spicedb-postgres-db:5432/spicedb?sslmode=disable
+    depends_on:
+      inkeep-agents-spicedb-postgres-db:
+        condition: service_healthy
+
+  inkeep-agents-spicedb-postgres-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: spicedb
+      POSTGRES_PASSWORD: spicedb
+      POSTGRES_DB: spicedb
+    volumes:
+      - inkeep-agents-spicedb-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U spicedb']
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  inkeep-agents-doltgres-data:
+  inkeep-agents-postgres-data:
+  inkeep-agents-spicedb-postgres-data:

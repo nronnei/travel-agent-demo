@@ -32,6 +32,34 @@ Vite proxies `/api` to the API, so the browser only ever talks to one origin.
 Other tasks run across every workspace through Turbo: `npm run build`, `lint`,
 `typecheck`, `test`. Use `npm run test:e2e -w @travel-agent/api` for API e2e tests.
 
+## Chat agent (Inkeep)
+
+The chat panel is backed by a self-hosted [Inkeep](https://github.com/inkeep/agents)
+agent. The browser posts to `/api/chat`; the Nest API forwards it to Inkeep's run API
+with a server-side secret and streams the reply back (Vercel AI SDK `useChat` format).
+
+```
+apps/agents       Inkeep project/agent definitions (@inkeep/agents-sdk), pushed with the CLI
+apps/api/src/chat /api/chat proxy → Inkeep /run/api/chat
+docker-compose    inkeep-* services: agents API (:3002), visual builder (:3001), Postgres,
+                  Doltgres, SpiceDB
+```
+
+First-time setup:
+
+```sh
+./scripts/init-env.sh                         # writes .env with generated secrets
+$EDITOR .env                                  # set ANTHROPIC_API_KEY
+docker compose up -d inkeep-agents-manage-ui  # Inkeep stack + its dependencies
+npm run push -w @travel-agent/agents          # load the agent into Inkeep
+npm run dev
+```
+
+Re-run the push after editing anything under `apps/agents/src`. The visual builder at
+http://localhost:3001 (credentials in `.env`) shows the agent and conversation traces.
+The `@inkeep/*` packages are pinned to the image version (`INKEEP_VERSION`, 0.80.4), and
+a root `overrides` entry keeps them on zod 4.5, since zod 4.6 breaks Inkeep 0.80.
+
 ## Containers
 
 Each app has a multi-stage Dockerfile, built from the repo root:

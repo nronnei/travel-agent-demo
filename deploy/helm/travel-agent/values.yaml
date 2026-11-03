@@ -59,6 +59,21 @@ web:
     limits:
       memory: 128Mi
 
+# The Inkeep agent service behind /api/chat. Chat returns 503 until apiUrl and
+# existingSecret are both set.
+inkeep:
+  # Inkeep's agents API as seen from the API pod, e.g. http://inkeep-agents-api.inkeep:3002
+  apiUrl: ''
+  tenantId: default
+  projectId: travel-agent
+  agentId: travel-agent
+  # Secret (created outside the chart) whose keys are added to the API's env. It needs:
+  #   INKEEP_AGENTS_RUN_API_BYPASS_SECRET  the Inkeep run API bypass secret
+  #   INTAKE_API_TOKEN                     shared token Inkeep's context fetcher sends back
+  # kubectl -n travel-agent create secret generic travel-agent-inkeep \
+  #   --from-literal=INKEEP_AGENTS_RUN_API_BYPASS_SECRET=... --from-literal=INTAKE_API_TOKEN=...
+  existingSecret: ''
+
 ingress:
   enabled: true
   className: ''

@@ -37,7 +37,8 @@ app.kubernetes.io/component: {{ .component }}
 
 {{/*
 Deployment shared by every component.
-Expects (dict "root" $ "component" "api" "values" .Values.api "env" (dict ...)).
+Expects (dict "root" $ "component" "api" "values" .Values.api "env" (dict ...)),
+plus an optional "envFromSecret" naming a Secret whose keys all become env vars.
 Entries in .values.env override the computed "env".
 */}}
 {{- define "travel-agent.deployment" -}}
@@ -89,6 +90,11 @@ spec:
           ports:
             - name: http
               containerPort: {{ $v.containerPort }}
+          {{- with .envFromSecret }}
+          envFrom:
+            - secretRef:
+                name: {{ . }}
+          {{- end }}
           {{- with $env }}
           env:
             {{- range $name, $value := . }}

@@ -1,0 +1,22 @@
+{
+  "name": "@travel-agent/agents",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "push": "INKEEP_CI=true inkeep push --project src/projects/travel-agent --quiet",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src"
+  },
+  "dependencies": {
+    "@inkeep/agents-core": "0.80.4",
+    "@inkeep/agents-sdk": "0.80.4",
+    "@travel-agent/shared": "*",
+    "zod": "~4.5.4"
+  },
+  "devDependencies": {
+    "@inkeep/agents-cli": "0.80.4",
+    "@types/node": "^26.6.6",
+    "dotenv": "^17.2.3"
+  }
+}

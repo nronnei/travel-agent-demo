@@ -27,5 +27,16 @@
     "prettier": "^3.4.2",
     "turbo": "^2.11.10",
     "typescript": "~6.0.2"
+  },
+  "overrides": {
+    "@inkeep/agents-core": "0.80.4",
+    "@inkeep/agents-manage-ui": "0.80.4",
+    "@inkeep/agents-sdk": {
+      "zod": "~4.5.4"
+    },
+    "@inkeep/agents-cli": {
+      "zod": "~4.5.4"
+    },
+    "react-dom": "^19.3.1"
   }
 }
