@@ -13,4 +13,5 @@ web:
     requests:
       memory: 128Mi
     limits:
-      memory: 1Gi
+      # Vite's dependency optimizer spikes past 1Gi on startup alongside tsc --watch.
+      memory: 2Gi
