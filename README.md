@@ -7,7 +7,7 @@ deployed to the homelab k3s cluster with Helm.
 apps/api          NestJS 12 + @nestjs/platform-fastify   → /api/*
 apps/web          Vite 8 + React 19 + Chakra UI v3       → /
 packages/shared   zod schemas + types used by both apps
-deploy/helm       Helm chart (values-homelab.yaml, values-dev.yaml)
+deploy/helm       Helm chart (generic defaults + values-dev.yaml for Tilt)
 Tiltfile          in-cluster dev loop with live sync
 ```
 
@@ -74,10 +74,28 @@ docker compose up --build     # production images on :3000 / :8080
 
 ## Homelab cluster
 
-The app is served at https://travel.home.lab. Cilium ingress routes `/api` to the API and
-everything else to web; cert-manager (`homelab-ca`) issues TLS and external-dns publishes
-the record. Images go to `code.home.lab/admin/travel-agent-{api,web}`. They're built
-amd64-only, and the chart pins pods to amd64 nodes, since amalthea and adrastea are arm64.
+The chart here is generic. Everything specific to the homelab cluster (hostname, TLS,
+image repositories, node placement, Inkeep URL) lives in the homelab repo:
+`helm-values/travel-agent.yaml`, plus `travel-agent-dev.yaml` for the dev loop. Both
+`tilt up` and `npm run deploy` expect the homelab repo at `../../homelab`. Set
+`HOMELAB_DIR` if it's somewhere else.
+
+| | Namespace | URL |
+| :--- | :--- | :--- |
+| Release (`npm run deploy`) | `travel-agent` | https://travel.honnei.house |
+| Dev loop (`tilt up`) | `travel-agent-dev` | https://travel-dev.honnei.house |
+
+Cilium ingress routes `/api` to the API and everything else to web. TLS uses the homelab's
+Let's Encrypt wildcard cert, and external-dns publishes the records. Images go to
+`code.honnei.house/admin/travel-agent-{api,web}` and are built amd64-only. The homelab
+values pin pods to amd64 nodes, since amalthea and adrastea are arm64.
+
+One-time registry login (Gitea credentials):
+
+```sh
+docker login code.honnei.house
+helm registry login code.honnei.house
+```
 
 **Dev loop:**
 
@@ -85,9 +103,10 @@ amd64-only, and the chart pins pods to amd64 nodes, since amalthea and adrastea 
 tilt up
 ```
 
-This builds the `dev` images, pushes them, and helm-deploys with `values-dev.yaml`. Edits
-under `src/` sync into the running pods and hot-reload. Changes to `package.json` or the
-lockfile trigger a full image rebuild.
+This builds the `dev` images, pushes them, and helm-deploys into `travel-agent-dev` with
+the homelab values plus `values-dev.yaml`. Edits under `src/` sync into the running pods
+and hot-reload. Changes to `package.json` or the lockfile trigger a full image rebuild.
+`tilt down` only removes the dev deployment.
 
 **Release-style deploy:**
 
@@ -95,5 +114,9 @@ lockfile trigger a full image rebuild.
 npm run deploy
 ```
 
-This builds the `runtime` images, tags them with the git SHA, pushes them, and runs
-`helm upgrade --install`.
+This runs `scripts/publish.sh`, which builds the `runtime` images and tags them with the
+git SHA, then publishes the chart to `oci://code.honnei.house/admin/travel-agent` as
+`<chart version>-g<sha>`. The chart's image tags default to its appVersion (the SHA), so
+each chart version pins its images. The script then runs `helm upgrade --install` with
+that version and the homelab values. Use `scripts/publish.sh` alone to publish without
+deploying.

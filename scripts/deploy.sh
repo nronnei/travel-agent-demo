@@ -1,22 +1,26 @@
 #!/usr/bin/env bash
-# Build, push, and helm-deploy the production images to the homelab cluster.
+# Publish (scripts/publish.sh), then deploy that chart version to the homelab
+# cluster. Cluster-specific values live in the homelab repo
+# (helm-values/travel-agent.yaml); set HOMELAB_DIR if it isn't at ../../homelab.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+REGISTRY="${REGISTRY:-code.honnei.house/admin}"
 NAMESPACE="${NAMESPACE:-travel-agent}"
-CHART=deploy/helm/travel-agent
+HOMELAB_DIR="${HOMELAB_DIR:-$(cd ../.. && pwd)/homelab}"
+VALUES="${HOMELAB_DIR}/helm-values/travel-agent.yaml"
 
-# Unique tag per deploy so pods always roll to the new image.
-TAG="${TAG:-$(git rev-parse --short HEAD 2>/dev/null || echo dev)}"
-if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
-  TAG="${TAG}-dirty-$(date +%s)"
+if [[ ! -f "${VALUES}" ]]; then
+  echo "Missing ${VALUES}. Clone the homelab repo or set HOMELAB_DIR." >&2
+  exit 1
 fi
 
-./scripts/docker-build.sh "${TAG}" --push
+CHART_VERSION="$(REGISTRY="${REGISTRY}" ./scripts/publish.sh | tail -n1)"
 
-helm upgrade --install travel-agent "${CHART}" \
+helm upgrade --install travel-agent "oci://${REGISTRY}/travel-agent" \
+  --version "${CHART_VERSION}" \
   --namespace "${NAMESPACE}" --create-namespace \
-  -f "${CHART}/values-homelab.yaml" \
-  --set api.image.tag="${TAG}" \
-  --set web.image.tag="${TAG}" \
+  -f "${VALUES}" \
   --wait --timeout 5m
+
+echo "Deployed travel-agent chart ${CHART_VERSION} to ${NAMESPACE}"
