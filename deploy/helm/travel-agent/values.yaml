@@ -10,7 +10,7 @@ api:
   replicas: 1
   image:
     repository: travel-agent-api
-    tag: latest
+    tag: '' # defaults to the chart's appVersion
     pullPolicy: Always
   containerPort: 3000
   healthPath: /api/health
@@ -37,7 +37,7 @@ web:
   replicas: 1
   image:
     repository: travel-agent-web
-    tag: latest
+    tag: '' # defaults to the chart's appVersion
     pullPolicy: Always
   containerPort: 8080
   healthPath: /
@@ -62,7 +62,7 @@ web:
 # The Inkeep agent service behind /api/chat. Chat returns 503 until apiUrl and
 # existingSecret are both set.
 inkeep:
-  # Inkeep's agents API as seen from the API pod, e.g. http://inkeep-agents-api.inkeep:3002
+  # Inkeep's agents API as seen from the API pod, e.g. http://inkeep-api.inkeep:3002
   apiUrl: ''
   tenantId: default
   projectId: travel-agent

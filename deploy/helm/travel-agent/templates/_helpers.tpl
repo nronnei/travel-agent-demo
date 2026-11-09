@@ -81,7 +81,7 @@ spec:
       {{- end }}
       containers:
         - name: {{ .component }}
-          image: "{{ $v.image.repository }}:{{ $v.image.tag }}"
+          image: "{{ $v.image.repository }}:{{ $v.image.tag | default $root.Chart.AppVersion }}"
           imagePullPolicy: {{ $v.image.pullPolicy }}
           {{- with $v.securityContext }}
           securityContext:
