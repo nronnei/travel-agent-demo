@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Build the production images. They're amd64-only; the homelab chart pins pods
-# to amd64 nodes.
+# to amd64 nodes (homelab repo: helm-values/travel-agent.yaml).
 # Usage: scripts/docker-build.sh [tag] [--push]
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REGISTRY="${REGISTRY:-code.home.lab/admin}"
+REGISTRY="${REGISTRY:-code.honnei.house/admin}"
 TAG="${1:-latest}"
 PUSH="${2:-}"
 

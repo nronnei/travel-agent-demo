@@ -1,4 +1,4 @@
-# Layered on top of values-homelab.yaml by the Tiltfile. The dev images run
+# Layered by the Tiltfile on top of the homelab repo's travel-agent values. The dev images run
 # watchers as root against live-synced source, so production hardening is off.
 api:
   securityContext: null
@@ -13,4 +13,5 @@ web:
     requests:
       memory: 128Mi
     limits:
-      memory: 1Gi
+      # Vite's dependency optimizer spikes past 1Gi on startup alongside tsc --watch.
+      memory: 2Gi
