@@ -4,7 +4,13 @@
 **/.turbo
 **/*.tsbuildinfo
 **/*.log
+# Env files and local secrets never go in an image (none of the Dockerfiles
+# read them; containers get env from Kubernetes Secrets).
 **/.env
+**/.env.*
+**/*-secret.yaml
+# Claude Code state, including other sessions' full worktree checkouts.
+.claude
 .git
 deploy
 Tiltfile
