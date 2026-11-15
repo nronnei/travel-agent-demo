@@ -2,6 +2,9 @@
 # watchers as root against live-synced source, so production hardening is off.
 api:
   securityContext: null
+  env:
+    # A lower best-effort cap for dev; the hard ceiling is the Tavily plan.
+    SEARCH_DAILY_LIMIT: '100'
   resources:
     limits:
       memory: 1Gi
@@ -15,3 +18,18 @@ web:
     limits:
       # Vite's dependency optimizer spikes past 1Gi on startup alongside tsc --watch.
       memory: 2Gi
+
+# Dev has its own Inkeep project, pointed at this namespace's API
+# (scripts/push-agents.sh dev), so pushes for dev and prod don't collide.
+inkeep:
+  projectId: travel-agent-dev
+
+# Runs alongside Inkeep in dev; `tilt up -- --chat-backend=parlant` points the API at it.
+parlant:
+  enabled: true
+  securityContext: null
+  # Keeps sessions across pod restarts (Tilt replaces the pod on config changes);
+  # with an emptyDir the API's cached session ids would point at nothing.
+  persistence:
+    enabled: true
+    storageClassName: longhorn

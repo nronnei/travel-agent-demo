@@ -17,6 +17,11 @@ interface IntakeRecord {
   identity: GuestIdentity;
   /** Set only once the guest confirms the brief. */
   trip?: TripBriefProps;
+  /**
+   * The latest unconfirmed brief, written by the Parlant agent when it shows
+   * one and by the app when the guest edits it. Inkeep never sets it.
+   */
+  draft?: TripBriefProps;
 }
 
 /** Oldest conversations are evicted beyond this, so the in-memory store stays bounded. */
@@ -67,6 +72,17 @@ export class IntakeService {
     return intakeContext(record.identity, trip);
   }
 
+  /**
+   * Stores an unconfirmed brief. The caller must already be authorized (by
+   * conversation key or the intake token); the conversation must exist.
+   */
+  saveDraft(conversationId: string, draft: TripBriefProps): IntakeContext {
+    const record = this.records.get(conversationId);
+    if (!record) throw new NotFoundException('Unknown conversation');
+    this.store(conversationId, { ...record, draft });
+    return intakeContext(record.identity, record.trip, draft);
+  }
+
   /** Throws unless `key` is the one issued for this conversation. */
   authorize(conversationId: string, key: string | undefined): IntakeRecord {
     const record = this.records.get(conversationId);
@@ -78,7 +94,7 @@ export class IntakeService {
 
   context(conversationId: string): IntakeContext {
     const record = this.records.get(conversationId);
-    return intakeContext(record?.identity, record?.trip);
+    return intakeContext(record?.identity, record?.trip, record?.draft);
   }
 
   private store(conversationId: string, record: IntakeRecord) {

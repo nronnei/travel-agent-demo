@@ -11,7 +11,7 @@ import {
  */
 async function put(
   chatId: string,
-  path: 'identity' | 'trip',
+  path: 'identity' | 'trip' | 'draft',
   body: unknown,
   key: string | undefined,
 ): Promise<unknown> {
@@ -46,4 +46,16 @@ export async function confirmTrip(
   key: string | undefined,
 ): Promise<void> {
   await put(chatId, 'trip', trip, key);
+}
+
+/**
+ * Saves a brief the guest edited, unconfirmed, for the Parlant agent to read
+ * back on its next turn. (Inkeep instead gets the edit described in the message.)
+ */
+export async function saveDraft(
+  chatId: string,
+  brief: TripBriefProps,
+  key: string | undefined,
+): Promise<void> {
+  await put(chatId, 'draft', brief, key);
 }

@@ -1,0 +1,43 @@
+{{- if .Values.parlant.enabled -}}
+{{- $ctx := dict "root" . "component" "parlant" "values" .Values.parlant -}}
+{{- $parlantHome := "/var/lib/parlant" -}}
+{{- $env := dict
+  "PARLANT_HOME" $parlantHome
+  "PORT" .Values.parlant.containerPort
+  "PARLANT_AGENT_ID" .Values.parlant.agentId
+  "PARLANT_INTAKE_EFFORT" .Values.parlant.effort.intake
+  "PARLANT_PLANNING_EFFORT" .Values.parlant.effort.planning
+  "INTAKE_API_URL" (printf "http://%s:%v" (include "travel-agent.componentName" (dict "root" . "component" "api")) .Values.api.service.port)
+-}}
+{{- $home := dict "name" "parlant-home" -}}
+{{- if .Values.parlant.persistence.enabled -}}
+{{- $_ := set $home "persistentVolumeClaim" (dict "claimName" (include "travel-agent.componentName" $ctx)) -}}
+{{- /* A ReadWriteOnce volume can't be mounted by the old and new pod at once. */ -}}
+{{- $_ := set $ctx "strategy" (dict "type" "Recreate") -}}
+{{- else -}}
+{{- $_ := set $home "emptyDir" (dict) -}}
+{{- end -}}
+{{- $volumes := list $home (dict "name" "tmp" "emptyDir" (dict)) -}}
+{{- $mounts := list (dict "name" "parlant-home" "mountPath" $parlantHome) (dict "name" "tmp" "mountPath" "/tmp") -}}
+{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.parlant.existingSecret "volumes" $volumes "volumeMounts" $mounts) $ctx) }}
+---
+{{ include "travel-agent.service" $ctx }}
+{{- if .Values.parlant.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "travel-agent.componentName" $ctx }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: parlant
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.parlant.persistence.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.parlant.persistence.size }}
+{{- end }}
+{{- end }}

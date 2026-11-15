@@ -108,4 +108,46 @@ describe('IntakeController', () => {
       BadRequestException,
     );
   });
+
+  it('serves a draft brief until the trip is confirmed', () => {
+    const c = controller();
+    const { conversationKey } = c.setIdentity('chat1', identity);
+
+    // The Parlant agent's tool writes with the intake token.
+    c.saveDraft('chat1', trip, undefined, 'tok');
+    expect(c.context('chat1', 'tok')).toMatchObject({
+      destination: 'New England',
+      interests: 'Fall foliage, Food & drink',
+      briefConfirmed: 'no',
+    });
+
+    // The guest's own edit, with their conversation key.
+    c.saveDraft('chat1', { ...trip, destination: 'Vermont' }, conversationKey);
+    expect(c.context('chat1', 'tok').destination).toBe('Vermont');
+
+    // Confirming wins over any later draft.
+    c.confirmTrip('chat1', trip, conversationKey);
+    c.saveDraft('chat1', { ...trip, destination: 'Maine' }, conversationKey);
+    expect(c.context('chat1', 'tok')).toMatchObject({
+      destination: 'New England',
+      briefConfirmed: 'yes',
+    });
+  });
+
+  it('guards draft writes by conversation key or intake token', () => {
+    const c = controller();
+    c.setIdentity('chat1', identity);
+    expect(() => c.saveDraft('chat1', trip, 'guess')).toThrow(
+      ForbiddenException,
+    );
+    expect(() => c.saveDraft('chat1', trip, undefined, 'nope')).toThrow(
+      UnauthorizedException,
+    );
+    expect(() => c.saveDraft('nobody', trip, undefined, 'tok')).toThrow(
+      NotFoundException,
+    );
+    expect(() =>
+      c.saveDraft('chat1', { ...trip, purpose: 'tbd' }, undefined, 'tok'),
+    ).toThrow(BadRequestException);
+  });
 });

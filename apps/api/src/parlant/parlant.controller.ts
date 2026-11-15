@@ -1,0 +1,137 @@
+import { Readable } from 'node:stream';
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
+import {
+  Body,
+  Controller,
+  Get,
+  GoneException,
+  Headers,
+  HttpCode,
+  Param,
+  Post,
+  Query,
+  Res,
+} from '@nestjs/common';
+import {
+  CONVERSATION_KEY_HEADER,
+  ConversationIdSchema,
+} from '@travel-agent/shared';
+import type { FastifyReply } from 'fastify';
+import { z } from 'zod';
+import { parse } from '../common/validation.js';
+import { IntakeService } from '../intake/intake.service.js';
+import { ParlantClient } from './parlant.client.js';
+import { ParlantService } from './parlant.service.js';
+
+const MessageSchema = z.object({ text: z.string().trim().min(1).max(4000) });
+const OffsetSchema = z.coerce.number().int().min(0).optional();
+const EventIdSchema = z.string().regex(/^[\w-]{1,64}$/);
+
+/**
+ * The Parlant chat, passed through with ownership checks. Parlant's own event
+ * model reaches the browser unchanged: guest messages go in as events, and the
+ * session's events (status, tool results, streamed messages) come back as SSE.
+ */
+@Controller('parlant/:conversationId')
+export class ParlantController {
+  constructor(
+    private readonly intake: IntakeService,
+    private readonly parlant: ParlantService,
+    private readonly client: ParlantClient,
+  ) {}
+
+  /** Starts an agent turn. Returns the guest message's event offset. */
+  @Post('messages')
+  @HttpCode(200)
+  async message(
+    @Param('conversationId') id: string,
+    @Headers(CONVERSATION_KEY_HEADER) key: string | undefined,
+    @Body() body: unknown,
+  ): Promise<{ offset: number }> {
+    const { text } = parse(MessageSchema, body);
+    const event = await this.inSession(id, key, (session) =>
+      this.client.postMessage(session, text),
+    );
+    return { offset: event.offset };
+  }
+
+  @Post('cancel')
+  @HttpCode(204)
+  async cancel(
+    @Param('conversationId') id: string,
+    @Headers(CONVERSATION_KEY_HEADER) key: string | undefined,
+  ): Promise<void> {
+    await this.inSession(id, key, (session) => this.client.cancel(session));
+  }
+
+  /** The session's events from `min_offset` (or after Last-Event-ID), as SSE. */
+  @Get('events')
+  async events(
+    @Param('conversationId') id: string,
+    @Headers(CONVERSATION_KEY_HEADER) key: string | undefined,
+    @Headers('last-event-id') lastEventId: string | undefined,
+    @Query('min_offset') minOffset: unknown,
+    @Res() reply: FastifyReply,
+  ) {
+    const query = { minOffset: parse(OffsetSchema, minOffset), lastEventId };
+    return this.inSession(id, key, (session) =>
+      this.pipe(reply, (signal) => this.client.events(session, query, signal)),
+    );
+  }
+
+  /** One event, re-sent as it grows: follows an agent message as it streams. */
+  @Get('events/:eventId')
+  async event(
+    @Param('conversationId') id: string,
+    @Param('eventId') eventId: string,
+    @Headers(CONVERSATION_KEY_HEADER) key: string | undefined,
+    @Res() reply: FastifyReply,
+  ) {
+    const event = parse(EventIdSchema, eventId);
+    return this.inSession(id, key, (session) =>
+      this.pipe(reply, (signal) => this.client.event(session, event, signal)),
+    );
+  }
+
+  /**
+   * Runs `use` with the conversation's Parlant session. A session Parlant no
+   * longer has (410) is forgotten, so the API stops pointing at it.
+   */
+  private async inSession<T>(
+    id: string,
+    key: string | undefined,
+    use: (session: string) => Promise<T>,
+  ): Promise<T> {
+    const conversationId = parse(ConversationIdSchema, id);
+    // Only the browser that claimed this conversation may talk in it.
+    this.intake.authorize(conversationId, key);
+    const session = await this.parlant.sessionFor(conversationId);
+    try {
+      return await use(session);
+    } catch (err) {
+      if (err instanceof GoneException) this.parlant.forget(conversationId);
+      throw err;
+    }
+  }
+
+  /** Streams Parlant's SSE response through, closing upstream when the browser goes. */
+  private async pipe(
+    reply: FastifyReply,
+    open: (signal: AbortSignal) => Promise<Response>,
+  ) {
+    const abort = new AbortController();
+    reply.raw.on('close', () => {
+      if (!reply.raw.writableFinished) abort.abort();
+    });
+    const res = await open(abort.signal);
+    // fetch's web stream is typed against DOM lib; it is Node's implementation at runtime.
+    const body = Readable.fromWeb(res.body as NodeReadableStream<Uint8Array>);
+    // An aborted upstream read errors the stream; the browser has gone anyway.
+    body.on('error', () => undefined);
+    return reply
+      .header('content-type', 'text/event-stream')
+      .header('cache-control', 'no-cache, no-transform')
+      .header('x-accel-buffering', 'no')
+      .send(body);
+  }
+}

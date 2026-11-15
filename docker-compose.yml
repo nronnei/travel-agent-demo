@@ -26,6 +26,9 @@ services:
       INKEEP_PROJECT_ID: ${INKEEP_PROJECT_ID:-travel-agent}
       INKEEP_AGENT_ID: ${INKEEP_AGENT_ID:-travel-agent}
       INTAKE_API_TOKEN: ${INTAKE_API_TOKEN}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      SEARCH_API_TOKEN: ${SEARCH_API_TOKEN}
+      SEARCH_PROVIDER: ${SEARCH_PROVIDER:-}
     ports:
       - '${API_PORT:-4500}:3000'
     depends_on:
@@ -72,6 +75,8 @@ services:
       INKEEP_AGENTS_TEMP_JWT_PRIVATE_KEY: ${INKEEP_AGENTS_TEMP_JWT_PRIVATE_KEY}
       INKEEP_AGENTS_TEMP_JWT_PUBLIC_KEY: ${INKEEP_AGENTS_TEMP_JWT_PUBLIC_KEY}
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+      # Read at runtime by the travel-search MCP credential (memory store), sent as Bearer.
+      SEARCH_API_TOKEN: ${SEARCH_API_TOKEN}
       # No OTEL collector in this stack; keep the exporter from retrying a dead endpoint.
       OTEL_SDK_DISABLED: 'true'
     # Lets the context fetcher reach an API running on the host (npm run dev) on Linux too.
