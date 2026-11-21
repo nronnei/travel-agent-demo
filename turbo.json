@@ -18,7 +18,20 @@
     "dev": {
       "dependsOn": ["^build"],
       "cache": false,
-      "persistent": true
+      "persistent": true,
+      "passThroughEnv": [
+        "PORT",
+        "CHAT_BACKEND",
+        "INKEEP_*",
+        "INTAKE_*",
+        "PARLANT_*",
+        "ANTHROPIC_API_KEY",
+        "VOYAGE_API_KEY",
+        "TAVILY_API_KEY",
+        "SEARCH_*",
+        "API_PROXY_TARGET",
+        "VITE_*"
+      ]
     }
   }
 }

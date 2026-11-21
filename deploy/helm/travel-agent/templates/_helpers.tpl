@@ -38,7 +38,9 @@ app.kubernetes.io/component: {{ .component }}
 {{/*
 Deployment shared by every component.
 Expects (dict "root" $ "component" "api" "values" .Values.api "env" (dict ...)),
-plus an optional "envFromSecret" naming a Secret whose keys all become env vars.
+plus an optional "envFromSecret" naming a Secret whose keys all become env vars,
+optional "volumes" / "volumeMounts" lists, and an optional "strategy" (the
+Deployment's rollout strategy, e.g. Recreate for a ReadWriteOnce volume).
 Entries in .values.env override the computed "env".
 */}}
 {{- define "travel-agent.deployment" -}}
@@ -54,6 +56,10 @@ metadata:
     app.kubernetes.io/component: {{ .component }}
 spec:
   replicas: {{ $v.replicas }}
+  {{- with .strategy }}
+  strategy:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "travel-agent.selectorLabels" . | nindent 6 }}
@@ -123,6 +129,14 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .volumeMounts }}
+          volumeMounts:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .volumes }}
+      volumes:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- end }}
 
 {{/* Expects (dict "root" $ "component" "api" "values" .Values.api) */}}

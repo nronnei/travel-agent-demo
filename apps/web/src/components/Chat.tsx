@@ -1,9 +1,7 @@
-import { useChat } from '@ai-sdk/react';
 import { Alert, Box, Card, Spinner, Stack, Text } from '@chakra-ui/react';
 import {
   BASE_INTERESTS,
   BRIEF_CONFIRMED_MESSAGE,
-  CONVERSATION_KEY_HEADER,
   INTAKE_GREETING,
   IntakeComponent,
   IntakeComponentDataSchema,
@@ -15,14 +13,14 @@ import {
   nameAnswer,
   prefixAnswer,
   titleQuestion,
+  type ChatBackend,
   type GuestIdentity,
   type IntakeComponentData,
   type NamePrefix,
   type TripBriefProps,
 } from '@travel-agent/shared';
-import { DefaultChatTransport, type UIMessage } from 'ai';
+import type { UIMessage } from 'ai';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import Markdown from 'react-markdown';
 import { Composer, type ComposerMode } from './Composer';
 import {
   IntakeComponentView,
@@ -30,17 +28,17 @@ import {
   type IntakeHandlers,
 } from './IntakeComponents';
 import { confirmTrip, saveIdentity } from './intakeApi';
-
-// The Nest API proxies this to the Inkeep run API, adding auth server-side.
-// Inkeep keeps its own history and reads only the newest user message, and the
-// scripted intake messages exist only in this browser, so send just the new turn.
-// Per-request headers (the conversation key) and body (`brief`) pass through.
-const transport = new DefaultChatTransport({
-  api: '/api/chat',
-  prepareSendMessagesRequest: ({ id, messages, body }) => ({
-    body: { ...body, id, messages: messages.slice(-1) },
-  }),
-});
+import { SafeMarkdown } from './SafeMarkdown';
+import { SearchIndicator, SourceChips } from './SearchActivity';
+import type { ChatEngine } from '../chat/engine';
+import {
+  SEARCH_PART,
+  SearchActivitySchema,
+  sourceChips,
+  type SearchActivity,
+} from '../chat/searchActivity';
+import { useAiSdkEngine } from '../chat/useAiSdkEngine';
+import { useParlantEngine } from '../chat/useParlantEngine';
 
 /** A short pause before scripted replies, so they read like the concierge typing. */
 const SCRIPT_DELAY_MS = 600;
@@ -68,16 +66,28 @@ function messageText(message: UIMessage) {
 
 type Segment =
   | { kind: 'text'; text: string }
-  | { kind: 'component'; component: IntakeComponentData };
+  | { kind: 'component'; component: IntakeComponentData }
+  | { kind: 'search'; activity: SearchActivity };
 
 /**
- * An assistant message's text and data components, in the order they streamed.
- * Inkeep sends data components as `data-component` parts; unknown or malformed
- * ones are dropped.
+ * An assistant message's text and data components, in the order they arrived,
+ * with the turn's web search activity (if any) placed around them: the
+ * "searching" row above the text, the source chips below it, and nothing when
+ * every search failed (the reply says what to verify). Both engines represent
+ * widgets as `data-component` parts and search as a `data-search` part;
+ * unknown or malformed ones are dropped.
  */
 function messageSegments(message: UIMessage): Segment[] {
   const segments: Segment[] = [];
+  let search: SearchActivity | undefined;
   for (const part of message.parts) {
+    if (part.type === SEARCH_PART) {
+      const parsed = SearchActivitySchema.safeParse(
+        (part as { data: unknown }).data,
+      );
+      if (parsed.success) search = parsed.data;
+      continue;
+    }
     if (part.type === 'text') {
       const last = segments.at(-1);
       if (last?.kind === 'text') last.text += part.text;
@@ -88,14 +98,20 @@ function messageSegments(message: UIMessage): Segment[] {
         segments.push({ kind: 'component', component: parsed.data });
     }
   }
-  const visible = segments.filter(
-    (s) => s.kind === 'component' || s.text.trim(),
-  );
+  const visible = segments.filter((s) => s.kind !== 'text' || s.text.trim());
   // The recap ends with "Have I got that right?", so it reads last even if the
   // agent's own sentence streamed after it.
   const isRecap = (s: Segment) =>
     s.kind === 'component' && s.component.name === IntakeComponent.TripBrief;
-  return [...visible.filter((s) => !isRecap(s)), ...visible.filter(isRecap)];
+  const ordered = [
+    ...visible.filter((s) => !isRecap(s)),
+    ...visible.filter(isRecap),
+  ];
+  if (search?.state === 'searching')
+    return [{ kind: 'search', activity: search }, ...ordered];
+  if (search?.state === 'done' && sourceChips(search).length)
+    return [...ordered, { kind: 'search', activity: search }];
+  return ordered;
 }
 
 /**
@@ -178,7 +194,13 @@ function MessageBubble({
     <AssistantBubble>
       {segments.map((segment, i) =>
         segment.kind === 'text' ? (
-          <Markdown key={i}>{segment.text}</Markdown>
+          <SafeMarkdown key={i}>{segment.text}</SafeMarkdown>
+        ) : segment.kind === 'search' ? (
+          segment.activity.state === 'searching' ? (
+            <SearchIndicator key={i} activity={segment.activity} />
+          ) : (
+            <SourceChips key={i} activity={segment.activity} />
+          )
         ) : (
           <IntakeComponentView
             key={i}
@@ -214,17 +236,16 @@ function editAnswer(
     : `Let's make it ${value}.`;
 }
 
-export function Chat() {
+/** The chat screen, shared by both agent backends; `engine` talks to the agent. */
+export function ChatView({ engine }: { engine: ChatEngine }) {
   const {
     id: chatId,
     messages,
     setMessages,
-    sendMessage,
     status,
-    stop,
     error,
     clearError,
-  } = useChat({ transport });
+  } = engine;
   const [step, setStep] = useState<Step>({ kind: 'name' });
   // Issued by the API when the guest's identity is first stored; proves this
   // browser owns the conversation on every later intake and chat request.
@@ -245,7 +266,7 @@ export function Chat() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-  }, [messages, typing]);
+  }, [messages, typing, engine.typing]);
 
   useEffect(() => () => timers.current.forEach(clearTimeout), []);
 
@@ -275,14 +296,7 @@ export function Chat() {
     setLocalError(null);
     setPlaceholder(undefined);
     setEditedBrief(null);
-    const key = conversationKey.current;
-    void sendMessage(
-      { text },
-      {
-        headers: key ? { [CONVERSATION_KEY_HEADER]: key } : undefined,
-        body: brief ? { brief } : undefined,
-      },
-    );
+    engine.send(text, { key: conversationKey.current, brief });
   }
 
   /** Shows a brief the guest edited locally (no agent turn). */
@@ -458,8 +472,20 @@ export function Chat() {
               handlers={handlers}
             />
           ))}
-          {(status === 'submitted' || typing) && (
-            <Spinner size="sm" alignSelf="flex-start" />
+          {(status === 'submitted' || typing || engine.typing) && (
+            <Stack
+              direction="row"
+              align="center"
+              gap="2"
+              alignSelf="flex-start"
+            >
+              <Spinner size="sm" />
+              {engine.activity && !typing && (
+                <Text fontSize="sm" color="fg.muted">
+                  {engine.activity}
+                </Text>
+              )}
+            </Stack>
           )}
         </Stack>
 
@@ -479,9 +505,22 @@ export function Chat() {
           onName={onName}
           onText={onText}
           onCancelEdit={() => setEdit(null)}
-          onStop={() => void stop()}
+          onStop={() => engine.stop(conversationKey.current)}
         />
       </Card.Body>
     </Card.Root>
   );
+}
+
+function InkeepChat() {
+  return <ChatView engine={useAiSdkEngine()} />;
+}
+
+function ParlantChat() {
+  return <ChatView engine={useParlantEngine()} />;
+}
+
+/** The chat, on whichever agent backend the API is configured for. */
+export function Chat({ backend }: { backend: ChatBackend }) {
+  return backend === 'parlant' ? <ParlantChat /> : <InkeepChat />;
 }

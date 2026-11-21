@@ -9,20 +9,28 @@ import {
   Spinner,
   Text,
 } from '@chakra-ui/react';
-import type { Trip } from '@travel-agent/shared';
+import type { ChatBackend, Trip } from '@travel-agent/shared';
 import { useEffect, useState } from 'react';
-import { fetchTrips } from './api.ts';
+import { fetchConfig, fetchTrips } from './api.ts';
 import { Chat } from './components/Chat.tsx';
 import { ColorModeButton } from './components/ui/color-mode.tsx';
 
 export default function App() {
   const [trips, setTrips] = useState<Trip[]>();
   const [error, setError] = useState<string>();
+  // Chat waits for this: the API decides which agent backend (and so which
+  // chat engine) this session talks to.
+  const [chatBackend, setChatBackend] = useState<ChatBackend>();
 
   useEffect(() => {
     const controller = new AbortController();
     fetchTrips(controller.signal)
       .then(setTrips)
+      .catch((err: unknown) => {
+        if (!controller.signal.aborted) setError(String(err));
+      });
+    fetchConfig(controller.signal)
+      .then((config) => setChatBackend(config.chatBackend))
       .catch((err: unknown) => {
         if (!controller.signal.aborted) setError(String(err));
       });
@@ -45,9 +53,7 @@ export default function App() {
 
       {!trips && !error && <Spinner size="lg" />}
 
-      <Box mb="8">
-        <Chat />
-      </Box>
+      <Box mb="8">{chatBackend && <Chat backend={chatBackend} />}</Box>
 
       {trips && (
         <SimpleGrid columns={{ base: 1, md: 2 }} gap="4">

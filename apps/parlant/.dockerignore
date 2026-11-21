@@ -1,0 +1,10 @@
+.venv
+__pycache__
+.pytest_cache
+.ruff_cache
+parlant-data
+node_modules
+# Env files and local secrets never go in an image.
+.env
+.env.*
+*-secret.yaml

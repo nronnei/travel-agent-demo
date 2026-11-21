@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import {
   BadRequestException,
   Body,
@@ -19,14 +18,8 @@ import {
   TripBriefPropsSchema,
   type IntakeContext,
 } from '@travel-agent/shared';
-import type { z } from 'zod';
+import { parse, safeEqual } from '../common/validation.js';
 import { IntakeService } from './intake.service.js';
-
-function parse<T extends z.ZodType>(schema: T, value: unknown): z.infer<T> {
-  const parsed = schema.safeParse(value);
-  if (!parsed.success) throw new BadRequestException(parsed.error.issues);
-  return parsed.data;
-}
 
 function conversationId(id: string): string {
   if (!ConversationIdSchema.safeParse(id).success)
@@ -73,25 +66,42 @@ export class IntakeController {
   }
 
   /**
-   * Called by Inkeep's context fetcher on every agent turn. Guarded by a shared
-   * token (forwarded by the chat proxy) since it returns the guest's details.
+   * Stores an unconfirmed brief, for the Parlant agent to read back. Written by
+   * the web app (conversation key) when the guest edits the brief, and by the
+   * Parlant agent's tool (intake token) when it shows one.
+   */
+  @Put('draft')
+  saveDraft(
+    @Param('conversationId') id: string,
+    @Body() body: unknown,
+    @Headers(CONVERSATION_KEY_HEADER) key?: string,
+    @Headers(IntakeHeader.Token) token?: string,
+  ): IntakeContext {
+    const cid = conversationId(id);
+    if (token !== undefined) this.checkToken(token);
+    else this.intake.authorize(cid, key);
+    return this.intake.saveDraft(cid, parse(TripBriefPropsSchema, body));
+  }
+
+  /**
+   * Called by the agents on every turn (Inkeep's context fetcher, Parlant's
+   * guest-brief variable). Guarded by a shared token since it returns the
+   * guest's details.
    */
   @Get('context')
   context(
     @Param('conversationId') id: string,
     @Headers(IntakeHeader.Token) token: string | undefined,
   ): IntakeContext {
+    this.checkToken(token);
+    return this.intake.context(conversationId(id));
+  }
+
+  private checkToken(token: string | undefined) {
     const expected = this.config.get<string>('INTAKE_API_TOKEN');
     if (!expected)
       throw new ServiceUnavailableException('Intake is not configured');
     if (!token || !safeEqual(token, expected))
       throw new UnauthorizedException();
-    return this.intake.context(conversationId(id));
   }
-}
-
-function safeEqual(a: string, b: string): boolean {
-  const x = Buffer.from(a);
-  const y = Buffer.from(b);
-  return x.length === y.length && timingSafeEqual(x, y);
 }

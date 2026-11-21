@@ -5,6 +5,7 @@ import {
   type IntakeContext,
 } from '@travel-agent/shared';
 import { z } from 'zod';
+import { intakeApiUrl } from '../config';
 
 // The Nest chat proxy adds these to every run request (see apps/api/src/chat).
 const intakeHeaders = headers({
@@ -13,11 +14,6 @@ const intakeHeaders = headers({
     [IntakeHeader.Token]: z.string(),
   }),
 });
-
-// Where Inkeep reaches the Nest API, as seen from the Inkeep container. Read at push time.
-// The default is the `npm run dev` setup, where the API runs on the host (see .env.example).
-const intakeApiUrl =
-  process.env.INTAKE_API_URL ?? 'http://host.docker.internal:3000';
 
 const intakeFetcher = fetchDefinition({
   id: 'guest-intake',

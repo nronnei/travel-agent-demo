@@ -1,0 +1,11 @@
+{
+  "name": "@travel-agent/parlant",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Python (uv) project; these scripts let Turborepo run it with the rest.",
+  "scripts": {
+    "dev": "uv run python main.py",
+    "test": "uv run pytest",
+    "lint": "uv run ruff check . && uv run ruff format --check ."
+  }
+}

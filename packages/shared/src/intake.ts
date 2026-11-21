@@ -197,18 +197,26 @@ export const IntakeContextSchema = z.object({
 });
 export type IntakeContext = z.infer<typeof IntakeContextSchema>;
 
+/**
+ * `draft` is the latest unconfirmed brief (shown by the Parlant agent or edited
+ * by the guest in the app). It fills the brief fields until a trip is
+ * confirmed; only a confirmed `trip` sets `briefConfirmed`. Inkeep never writes
+ * a draft, so its context is unchanged.
+ */
 export function intakeContext(
   identity?: GuestIdentity,
   trip?: TripBriefProps,
+  draft?: TripBriefProps,
 ): IntakeContext {
+  const brief = trip ?? draft;
   return {
     address: identity ? formalAddress(identity) : '',
     givenName: identity?.givenName ?? '',
     surname: identity?.surname ?? '',
     prefix: identity?.prefix ?? '',
-    destination: trip?.destination ?? '',
-    purpose: trip?.purpose ?? '',
-    interests: trip?.interests.join(', ') ?? '',
+    destination: brief?.destination ?? '',
+    purpose: brief?.purpose ?? '',
+    interests: brief?.interests.join(', ') ?? '',
     briefConfirmed: trip ? 'yes' : 'no',
   };
 }
