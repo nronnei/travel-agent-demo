@@ -4,6 +4,13 @@
 **/.turbo
 **/*.tsbuildinfo
 **/*.log
+# Python virtualenvs and caches (apps/parlant builds from its own context).
+# Kept out of the root context, and so out of Tilt's file watches for the Node
+# images: apps/parlant/.venv alone is ~650 MB and 3,400 directories.
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
 # Env files and local secrets never go in an image (none of the Dockerfiles
 # read them; containers get env from Kubernetes Secrets).
 **/.env
