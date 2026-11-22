@@ -799,6 +799,7 @@ None right now. Open questions 0–3 from rev 2 were answered in rev 3 (see the 
 - rev 4: Keep the role passwords as they are (Tilt builds them from `.env`, made by hand in prod), rather than operator client certificates, a secret-generator controller or Helm `lookup`. Those felt heavier than needed (user). Revisit a secret generator if more roles appear.
 
 ## Changelog
+- rev 6: Step 11 Inkeep cutover done and verified; soak until 2026-11-29 before step 12.
 - rev 6: Step 11 rehearsal done; it found the SpiceDB transaction-ID issue, and the runbook gained step 5b plus a relationship check.
 - rev 6: Step 10 (prod API database) deployed and verified.
 - rev 6: Steps 1–9 and 13 implemented and verified on the dev cluster; homelab files for steps 10–11 written (not applied). See Implementation notes.
@@ -812,7 +813,7 @@ None right now. Open questions 0–3 from rev 2 were answered in rev 3 (see the 
 
 ## Implementation notes
 
-Steps 1–10 and 13 are done, plus the homelab file changes for step 11. Steps 11 (Inkeep rehearsal and cutover) and 12 (old Inkeep databases removed) touch live systems and wait for the user's go-ahead.
+Steps 1–11 and 13 are done. Step 12 (old Inkeep databases removed) waits for the soak, until 2026-11-29. Steps 11 and (Inkeep rehearsal and cutover) and 12 (old Inkeep databases removed) touch live systems and wait for the user's go-ahead.
 
 Deviations from the plan, with reasons:
 - **Steps 3 and 4 were done together.** The store interface went in with all its methods (`touch`, `setParlantSession`, `clearParlantSession`) at once, and the Postgres store with it, rather than a memory-only refactor first.
@@ -835,6 +836,14 @@ Step 10, prod (2026-11-22; the user applied the policy and alerts and ran `npm r
 - `travel-agent-db` is healthy in `travel-agent`; the API retried for about 45 s while it bootstrapped, then logged "Connected; migrations applied";
 - an intake claimed on https://travel.honnei.house still authorized after `rollout restart` (wrong key: 403), and the API connects with TLSv1.3; the test row was deleted;
 - Prometheus scrapes `travel-agent-db-1` through `travel-agent-db-policy`, and both CNPG alert rules are loaded (inactive).
+
+Step 11 cutover (2026-11-22, about 20:15–20:21 UTC; Inkeep chat was down about 6 minutes):
+- **Snapshots, not backups.** Longhorn has no backup target (no S3/NFS), so a Longhorn backup wasn't possible. I took Longhorn snapshots instead, `pre-cnpg-cutover-43ab8664` and `pre-cnpg-cutover-48205cec` (label `purpose=pre-cnpg-cutover`), after writes stopped. The old volumes aren't modified by the cutover, so these only guard against mistakes on them. Delete them in step 12.
+- The old values of the two keys are saved in `~/inkeep-cutover-rollback-2026-11-22.env` (mode 600), and the pre-cutover `apps/inkeep/inkeep-secret.yaml` in `~/inkeep-secret.yaml.pre-cnpg-2026-11-22`. The gitignored `inkeep-secret.yaml` now has the new values. The `inkeep-db-spicedb` Secret exists only in the cluster until step 12 teaches the script to write it.
+- The import, the SpiceDB restore and the transaction-ID repair went as rehearsed (the counter was raised to about 340k). Counts matched the baseline: 1 organization and 4 project tuples; 78/2/2 rows in `stream_chunks`/`messages`/`context_cache`.
+- `helm upgrade` brought `inkeep-api` and `inkeep-spicedb` back to 1 replica; `inkeep-ui` was restarted to pick up the patched Secret. Migrations applied, and there were no connection errors.
+- Smoke test: SpiceDB reads all 5 relationships; `inkeep` and `spicedb` connect to `inkeep-db`; both old servers have no client connections; the manage UI answers (307 to login); a prod chat turn on https://travel.honnei.house streamed a reply and was recorded (messages 2 → 4); `npm run agents:push:dev` succeeded. A first chat attempt returned 502 only because the test reused message id `m1`, which already exists in the project (the web app sends random ids).
+- **Soak until 2026-11-29**, then step 12. Before deleting anything there, check that `pg_stat_activity` on both old servers still shows no clients.
 
 Step 11 rehearsal (2026-11-22, on a throwaway `inkeep-db-test`, with the live Inkeep untouched):
 - The old run DB uses only `plpgsql`, and `appuser` is its only role (a superuser). The import brought over 52 tables in `drizzle` and `public`, all owned by the non-superuser `inkeep` role, with matching row counts on the largest tables.
