@@ -1,0 +1,115 @@
+{{- /*
+The environment's one CloudNativePG cluster. The API owns the bootstrap database
+("api"); each agent backend with <component>.postgres.enabled gets its own role and
+database. pg_hba lets each role reach only its own database, and only over TLS.
+*/ -}}
+{{- $pg := .Values.postgres -}}
+{{- $backends := list -}}
+{{- range $component := list "langgraph" "parlant" -}}
+{{- if (index $.Values $component).postgres.enabled -}}
+{{- if not $pg.enabled -}}
+{{- fail (printf "%s.postgres.enabled needs postgres.enabled=true (the cluster its database lives in)" $component) -}}
+{{- end -}}
+{{- $backends = append $backends $component -}}
+{{- end -}}
+{{- end -}}
+{{- if $pg.enabled -}}
+{{- $cluster := include "travel-agent.postgresClusterName" . -}}
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $cluster }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db
+  annotations:
+    # Neither `helm uninstall` nor `tilt down` should drop the data. Delete the
+    # Cluster by hand to wipe it: kubectl delete cluster {{ $cluster }}
+    helm.sh/resource-policy: keep
+    tilt.dev/down-policy: keep
+spec:
+  instances: {{ $pg.instances }}
+  imageName: {{ $pg.imageName }}
+  enableSuperuserAccess: false
+  bootstrap:
+    initdb:
+      database: api
+      owner: api
+  postgresql:
+    pg_hba:
+      - hostssl api api all scram-sha-256
+      {{- range $backends }}
+      - hostssl {{ . }} {{ . }} all scram-sha-256
+      {{- end }}
+      {{- if $pg.isolation.rejectOthers }}
+      # Ahead of CNPG's default "host all all all scram-sha-256"; the operator's own
+      # rules (local, streaming_replica) come before these.
+      - host all all all reject
+      {{- end }}
+  storage:
+    {{- with $pg.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+    size: {{ $pg.size }}
+  {{- with .Values.nodeSelector }}
+  affinity:
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+  {{- with $pg.resources }}
+  resources:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- range $backends }}
+{{- $name := printf "%s-%s" $cluster . }}
+---
+# Password from the basic-auth Secret {{ $name }}, made outside the chart (see values.yaml).
+apiVersion: postgresql.cnpg.io/v1
+kind: DatabaseRole
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "travel-agent.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ . }}
+spec:
+  cluster:
+    name: {{ $cluster }}
+  name: {{ . }}
+  login: true
+  passwordSecret:
+    name: {{ $name }}
+  databaseRoleReclaimPolicy: retain
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Database
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "travel-agent.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ . }}
+spec:
+  cluster:
+    name: {{ $cluster }}
+  name: {{ . }}
+  owner: {{ . }}
+  databaseReclaimPolicy: retain
+{{- end }}
+{{- if $pg.podMonitor.enabled }}
+---
+# Postgres metrics into Prometheus, for the CloudNativePG Grafana dashboard.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ $cluster }}-metrics
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: db
+spec:
+  selector:
+    matchLabels:
+      cnpg.io/cluster: {{ $cluster }}
+      cnpg.io/podRole: instance
+  podMetricsEndpoints:
+    - port: metrics
+{{- end }}
+{{- end }}

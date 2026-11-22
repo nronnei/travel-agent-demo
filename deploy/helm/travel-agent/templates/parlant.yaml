@@ -19,7 +19,15 @@
 {{- end -}}
 {{- $volumes := list $home (dict "name" "tmp" "emptyDir" (dict)) -}}
 {{- $mounts := list (dict "name" "parlant-home" "mountPath" $parlantHome) (dict "name" "tmp" "mountPath" "/tmp") -}}
-{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.parlant.existingSecret "volumes" $volumes "volumeMounts" $mounts) $ctx) }}
+{{- $secretEnv := list -}}
+{{- if .Values.parlant.postgres.enabled -}}
+{{- $db := fromYaml (include "travel-agent.postgresConnection" (dict "root" . "component" "parlant" "prefix" "PARLANT_")) -}}
+{{- $env = merge $env $db.env -}}
+{{- $secretEnv = $db.secretEnv -}}
+{{- $volumes = append $volumes $db.volume -}}
+{{- $mounts = append $mounts $db.mount -}}
+{{- end -}}
+{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.parlant.existingSecret "volumes" $volumes "volumeMounts" $mounts "secretEnv" $secretEnv) $ctx) }}
 ---
 {{ include "travel-agent.service" $ctx }}
 {{- end }}

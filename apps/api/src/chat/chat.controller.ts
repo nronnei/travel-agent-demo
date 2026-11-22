@@ -33,7 +33,7 @@ export class ChatController {
     }
     // Only the browser that claimed this conversation (by storing the guest's
     // identity) may talk in it: its history and intake are the guest's.
-    this.intake.authorize(parsed.data.id, key);
+    await this.intake.authorize(parsed.data.id, key);
 
     // Stop the agent run if the browser goes away (tab closed, stop button).
     // Listen on the response: the request's 'close' fires as soon as its body is read.

@@ -64,6 +64,34 @@ http://localhost:3001 (credentials in `.env`) shows the agent and conversation t
 The `@inkeep/*` packages are pinned to the image version (`INKEEP_VERSION`, 0.80.4), and
 a root `overrides` entry keeps them on zod 4.5, since zod 4.6 breaks Inkeep 0.80.
 
+## Database
+
+Each environment has one Postgres cluster, `travel-agent-db`, run by the homelab's
+CloudNativePG operator and declared by the chart (`postgres.enabled`). Inside it,
+each service has its own database and role, and can reach only that one:
+
+| Database | Used by | Credentials |
+| :--- | :--- | :--- |
+| `api` | the API: one schema per area (`intake` so far) | `travel-agent-db-app`, made by the operator |
+| `langgraph` | LangGraph checkpoints | `travel-agent-db-langgraph` (basic-auth) |
+| `parlant` | Parlant sessions and customers | `travel-agent-db-parlant` (basic-auth) |
+
+- **Dev:** Tilt makes the two basic-auth Secrets from `LANGGRAPH_DB_PASSWORD` and
+  `PARLANT_DB_PASSWORD` in `.env` (older `.env` files need them added:
+  `openssl rand -hex 32`). In prod, only the API's database exists so far.
+- **Status:** `kubectl -n travel-agent-dev get cluster travel-agent-db`, or
+  `kubectl cnpg status travel-agent-db -n travel-agent-dev`.
+- **Wiping dev:** neither `tilt down` nor `helm uninstall` deletes the cluster.
+  Delete it by hand: `kubectl -n travel-agent-dev delete cluster travel-agent-db`.
+- **Schema changes (API):** edit `apps/api/src/database/schema/`, then
+  `npm run db:generate -w @travel-agent/api`. The API applies migrations at
+  startup. See `apps/api/src/database/README.md`.
+- **Locally** (`npm run dev`), nothing needs Postgres: without `DATABASE_URL` the
+  API keeps intake in memory, LangGraph uses SQLite and Parlant its local store.
+- Intake records are deleted after 7 days with no activity (`INTAKE_RETENTION_DAYS`).
+  LangGraph checkpoints and Parlant sessions have no retention yet, so their
+  databases stay off in prod.
+
 ## Containers
 
 Each app has a multi-stage Dockerfile, built from the repo root:

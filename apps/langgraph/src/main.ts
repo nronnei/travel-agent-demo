@@ -16,6 +16,8 @@ const model = (name: string) =>
     thinking: { type: 'between_tools' } as never,
   });
 
+const checkpointer = await createCheckpointer(config);
+
 const graph = buildGraph({
   models: {
     intake: model(config.LANGGRAPH_INTAKE_MODEL),
@@ -29,7 +31,7 @@ const graph = buildGraph({
     config.INTAKE_API_URL,
     config.SEARCH_API_TOKEN,
   ),
-  checkpointer: createCheckpointer(config),
+  checkpointer: checkpointer.saver,
 });
 
 const app = buildServer({ graph, apiToken: config.LANGGRAPH_API_TOKEN });
@@ -38,3 +40,12 @@ if (!config.LANGGRAPH_API_TOKEN)
 if (!config.INTAKE_API_TOKEN) app.log.warn('INTAKE_API_TOKEN is not set');
 
 await app.listen({ host: '0.0.0.0', port: config.PORT });
+
+// Close the server, then the database pool, when Kubernetes stops the pod.
+for (const signal of ['SIGTERM', 'SIGINT'] as const)
+  process.once(signal, () => {
+    void app
+      .close()
+      .then(() => checkpointer.close())
+      .finally(() => process.exit(0));
+  });

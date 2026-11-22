@@ -29,9 +29,9 @@ function fakeReply() {
   return reply;
 }
 
-function setup() {
+async function setup() {
   const intake = new IntakeService();
-  const { conversationKey } = intake.setIdentity('chat1', identity, undefined);
+  const { conversationKey } = await intake.setIdentity('chat1', identity, undefined);
   const client = {
     stream: vi.fn(
       async (..._args: unknown[]) =>
@@ -53,7 +53,7 @@ const message = (content: string) => ({
 
 describe('LangGraphController', () => {
   it("streams the guest's turn on the thread minted for this claim", async () => {
-    const { controller, client, key } = setup();
+    const { controller, client, key } = await setup();
     const reply = fakeReply();
     await controller.stream(
       'chat1',
@@ -81,7 +81,7 @@ describe('LangGraphController', () => {
   });
 
   it('forwards a widget answer as a resume command', async () => {
-    const { controller, client, key } = setup();
+    const { controller, client, key } = await setup();
     await controller.stream(
       'chat1',
       key,
@@ -98,7 +98,7 @@ describe('LangGraphController', () => {
   });
 
   it('lets only the browser that claimed the conversation talk in it', async () => {
-    const { controller, client } = setup();
+    const { controller, client } = await setup();
     await expect(
       controller.stream('chat1', 'guess', message('hi'), fakeReply() as never),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -109,7 +109,7 @@ describe('LangGraphController', () => {
   });
 
   it('validates the id and body', async () => {
-    const { controller, key } = setup();
+    const { controller, key } = await setup();
     for (const body of [
       {},
       message(''),
@@ -127,7 +127,7 @@ describe('LangGraphController', () => {
   });
 
   it('aborts upstream when the browser goes', async () => {
-    const { controller, client, key } = setup();
+    const { controller, client, key } = await setup();
     const reply = fakeReply();
     await controller.stream('chat1', key, message('hi'), reply as never);
     const signal = client.stream.mock.calls[0][2] as AbortSignal;
@@ -136,11 +136,11 @@ describe('LangGraphController', () => {
   });
 
   it('gives a reclaimed conversation id a new thread', async () => {
-    const { controller, client, key } = setup();
+    const { controller, client, key } = await setup();
     await controller.stream('chat1', key, message('hi'), fakeReply() as never);
     // A restarted API (a fresh store) lets anyone claim the id again.
     const restarted = new IntakeService();
-    const reclaimed = restarted.setIdentity('chat1', identity, undefined);
+    const reclaimed = await restarted.setIdentity('chat1', identity, undefined);
     await new LangGraphController(
       restarted,
       client as unknown as LangGraphClient,

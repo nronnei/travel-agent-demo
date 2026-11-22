@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConditionalModule, ConfigModule } from '@nestjs/config';
 import { chatBackend } from '@travel-agent/shared';
 import { ChatModule } from './chat/chat.module.js';
+import { DatabaseModule } from './database/database.module.js';
 import { AppConfigModule } from './config/config.module.js';
 import { HealthModule } from './health/health.module.js';
 import { IntakeModule } from './intake/intake.module.js';
@@ -31,6 +32,8 @@ import { TripsModule } from './trips/trips.module.js';
       LangGraphModule,
       (env) => chatBackend(env) === 'langgraph',
     ),
+    // Postgres when DATABASE_URL is set; stores fall back to memory without it.
+    DatabaseModule,
     AppConfigModule,
     HealthModule,
     IntakeModule,

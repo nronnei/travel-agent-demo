@@ -39,7 +39,8 @@ app.kubernetes.io/component: {{ .component }}
 Deployment shared by every component.
 Expects (dict "root" $ "component" "api" "values" .Values.api "env" (dict ...)),
 plus an optional "envFromSecret" naming a Secret whose keys all become env vars,
-optional "volumes" / "volumeMounts" lists, and an optional "strategy" (the
+optional "volumes" / "volumeMounts" lists, an optional "secretEnv" list of
+(dict "name" "ENV_VAR" "secret" "secret-name" "key" "key"), and an optional "strategy" (the
 Deployment's rollout strategy, e.g. Recreate for a ReadWriteOnce volume).
 .values.podSecurityContext, if set, becomes the pod's securityContext.
 Entries in .values.env override the computed "env".
@@ -106,9 +107,17 @@ spec:
             - secretRef:
                 name: {{ . }}
           {{- end }}
-          {{- with $env }}
+          {{- if or .secretEnv $env }}
           env:
-            {{- range $name, $value := . }}
+            {{- /* Secret entries first, so literal values can expand them with $(VAR). */ -}}
+            {{- range .secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secret }}
+                  key: {{ .key }}
+            {{- end }}
+            {{- range $name, $value := $env }}
             - name: {{ $name }}
               value: {{ $value | toString | quote }}
             {{- end }}
@@ -161,4 +170,44 @@ spec:
     - name: http
       port: {{ .values.service.port }}
       targetPort: http
+{{- end }}
+
+{{/* The environment's CNPG cluster (templates/postgres.yaml). Expects the root context. */}}
+{{- define "travel-agent.postgresClusterName" -}}
+{{- printf "%s-db" (include "travel-agent.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Connection settings for a backend's own database in the cluster: its role's password
+from the basic-auth Secret, a URL built from it, and the cluster CA for verifying the
+server. Expects (dict "root" $ "component" "langgraph" "prefix" "LANGGRAPH_"); returns
+YAML with "secretEnv", "env", "volume" and "mount", for fromYaml.
+The API instead reads the operator's <cluster>-app Secret (templates/api.yaml).
+*/}}
+{{- define "travel-agent.postgresConnection" -}}
+{{- $cluster := include "travel-agent.postgresClusterName" .root -}}
+{{- $password := printf "%sDB_PASSWORD" .prefix -}}
+secretEnv:
+  - name: {{ $password }}
+    secret: {{ printf "%s-%s" $cluster .component }}
+    key: password
+env:
+  {{ .prefix }}DATABASE_URL: {{ printf "postgresql://%s:$(%s)@%s-rw:5432/%s" .component $password $cluster .component | quote }}
+  {{ .prefix }}DATABASE_SSL_ROOT_CERT: /etc/postgres-ca/ca.crt
+{{ include "travel-agent.postgresCaMounts" .root }}
+{{- end }}
+
+{{/* The cluster CA volume and its mount, as YAML "volume" and "mount" keys. Expects the root context. */}}
+{{- define "travel-agent.postgresCaMounts" -}}
+volume:
+  name: postgres-ca
+  secret:
+    secretName: {{ include "travel-agent.postgresClusterName" . }}-ca
+    items:
+      - key: ca.crt
+        path: ca.crt
+mount:
+  name: postgres-ca
+  mountPath: /etc/postgres-ca
+  readOnly: true
 {{- end }}

@@ -16,3 +16,17 @@ describe('loadConfig', () => {
     expect(config.PORT).toBe(8900);
   });
 });
+
+describe('loadConfig (postgres)', () => {
+  it('needs a URL for the postgres checkpointer', () => {
+    expect(() => loadConfig({ LANGGRAPH_CHECKPOINTER: 'postgres' })).toThrow(
+      /LANGGRAPH_DATABASE_URL/,
+    );
+    const config = loadConfig({
+      LANGGRAPH_CHECKPOINTER: 'postgres',
+      LANGGRAPH_DATABASE_URL: 'postgresql://langgraph:pw@db-rw:5432/langgraph',
+      LANGGRAPH_DATABASE_SSL_ROOT_CERT: '/etc/postgres-ca/ca.crt',
+    });
+    expect(config.LANGGRAPH_CHECKPOINTER).toBe('postgres');
+  });
+});
