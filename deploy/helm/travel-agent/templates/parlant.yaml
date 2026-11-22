@@ -22,12 +22,17 @@
 {{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.parlant.existingSecret "volumes" $volumes "volumeMounts" $mounts) $ctx) }}
 ---
 {{ include "travel-agent.service" $ctx }}
+{{- end }}
+{{- /*
+The volume follows persistence, not enabled: in dev, Tilt turns off the agent
+that isn't selected, and its saved conversations should survive the switch.
+*/ -}}
 {{- if .Values.parlant.persistence.enabled }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "travel-agent.componentName" $ctx }}
+  name: {{ include "travel-agent.componentName" (dict "root" . "component" "parlant") }}
   labels:
     {{- include "travel-agent.labels" . | nindent 4 }}
     app.kubernetes.io/component: parlant
@@ -39,5 +44,4 @@ spec:
   resources:
     requests:
       storage: {{ .Values.parlant.persistence.size }}
-{{- end }}
 {{- end }}

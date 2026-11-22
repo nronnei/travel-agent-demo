@@ -66,8 +66,8 @@ web:
     limits:
       memory: 128Mi
 
-# Which agent backend serves chat: inkeep (the Inkeep run API, below) or parlant
-# (the in-chart Parlant service, below). Sets CHAT_BACKEND on the API; the web app
+# Which agent backend serves chat: inkeep (the Inkeep run API, below), parlant
+# (the in-chart Parlant service, below) or langgraph (the in-chart LangGraph service, below). Sets CHAT_BACKEND on the API; the web app
 # reads it from /api/config and picks the matching chat engine.
 chat:
   backend: inkeep
@@ -86,6 +86,8 @@ inkeep:
   #   TAVILY_API_KEY                       web search provider key (optional; search is off without it)
   #   SEARCH_API_TOKEN                     Bearer token the agents send to /api/search/web and /api/mcp;
   #                                        the same value as SEARCH_API_TOKEN in Inkeep's inkeep-secrets
+  #   LANGGRAPH_API_TOKEN                  Bearer token the API sends to the LangGraph service (only when
+  #                                        langgraph.enabled); the same value as in langgraph.existingSecret
   # kubectl -n travel-agent create secret generic travel-agent-inkeep \
   #   --from-literal=INKEEP_AGENTS_RUN_API_BYPASS_SECRET=... --from-literal=INTAKE_API_TOKEN=... \
   #   --from-literal=TAVILY_API_KEY=... --from-literal=SEARCH_API_TOKEN=...
@@ -135,6 +137,9 @@ parlant:
     enabled: false
     size: 1Gi
     storageClassName: ''
+  # Makes the volume writable by the container's user (uid 1000).
+  podSecurityContext:
+    fsGroup: 1000
   securityContext:
     runAsNonRoot: true
     runAsUser: 1000
@@ -150,3 +155,55 @@ parlant:
       memory: 512Mi
     limits:
       memory: 1Gi
+
+# The LangGraph agent service (apps/langgraph), the third backend. The API proxies
+# /api/langgraph/* to it when chat.backend is langgraph.
+langgraph:
+  enabled: false
+  replicas: 1
+  image:
+    repository: travel-agent-langgraph
+    tag: '' # defaults to the chart's appVersion
+    pullPolicy: Always
+  containerPort: 8900
+  healthPath: /healthz
+  service:
+    port: 8900
+  models:
+    intake: claude-sonnet-5-5
+    planning: claude-sonnet-5-5
+  env: {}
+  # Secret (created outside the chart) whose keys are added to the service's env. It needs:
+  #   ANTHROPIC_API_KEY    Claude models
+  #   INTAKE_API_TOKEN     the same token the API expects (see inkeep.existingSecret)
+  #   SEARCH_API_TOKEN     the same search token the API expects (optional; the tool falls back without it)
+  #   LANGGRAPH_API_TOKEN  the token the API sends (also in the API's secret)
+  # kubectl -n travel-agent create secret generic travel-agent-langgraph \
+  #   --from-literal=ANTHROPIC_API_KEY=... --from-literal=INTAKE_API_TOKEN=... \
+  #   --from-literal=SEARCH_API_TOKEN=... --from-literal=LANGGRAPH_API_TOKEN=...
+  existingSecret: ''
+  # Conversation checkpoints live in SQLite under /var/lib/langgraph, with no expiry
+  # (they hold the guest's details: add a TTL prune before any prod use). Without a
+  # PVC they reset whenever the pod restarts.
+  persistence:
+    enabled: false
+    size: 1Gi
+    storageClassName: ''
+  # Makes the volume writable by the container's user (uid 1000).
+  podSecurityContext:
+    fsGroup: 1000
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop: [ALL]
+    seccompProfile:
+      type: RuntimeDefault
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 512Mi

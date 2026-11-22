@@ -1,5 +1,3 @@
-import { Readable } from 'node:stream';
-import type { ReadableStream as NodeReadableStream } from 'node:stream/web';
 import {
   Body,
   Controller,
@@ -18,6 +16,7 @@ import {
 } from '@travel-agent/shared';
 import type { FastifyReply } from 'fastify';
 import { z } from 'zod';
+import { pipeSse } from '../common/sse.js';
 import { parse } from '../common/validation.js';
 import { IntakeService } from '../intake/intake.service.js';
 import { ParlantClient } from './parlant.client.js';
@@ -75,7 +74,7 @@ export class ParlantController {
   ) {
     const query = { minOffset: parse(OffsetSchema, minOffset), lastEventId };
     return this.inSession(id, key, (session) =>
-      this.pipe(reply, (signal) => this.client.events(session, query, signal)),
+      pipeSse(reply, (signal) => this.client.events(session, query, signal)),
     );
   }
 
@@ -89,7 +88,7 @@ export class ParlantController {
   ) {
     const event = parse(EventIdSchema, eventId);
     return this.inSession(id, key, (session) =>
-      this.pipe(reply, (signal) => this.client.event(session, event, signal)),
+      pipeSse(reply, (signal) => this.client.event(session, event, signal)),
     );
   }
 
@@ -112,26 +111,5 @@ export class ParlantController {
       if (err instanceof GoneException) this.parlant.forget(conversationId);
       throw err;
     }
-  }
-
-  /** Streams Parlant's SSE response through, closing upstream when the browser goes. */
-  private async pipe(
-    reply: FastifyReply,
-    open: (signal: AbortSignal) => Promise<Response>,
-  ) {
-    const abort = new AbortController();
-    reply.raw.on('close', () => {
-      if (!reply.raw.writableFinished) abort.abort();
-    });
-    const res = await open(abort.signal);
-    // fetch's web stream is typed against DOM lib; it is Node's implementation at runtime.
-    const body = Readable.fromWeb(res.body as NodeReadableStream<Uint8Array>);
-    // An aborted upstream read errors the stream; the browser has gone anyway.
-    body.on('error', () => undefined);
-    return reply
-      .header('content-type', 'text/event-stream')
-      .header('cache-control', 'no-cache, no-transform')
-      .header('x-accel-buffering', 'no')
-      .send(body);
   }
 }

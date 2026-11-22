@@ -15,3 +15,5 @@
 deploy
 Tiltfile
 docker-compose.yml
+# Local checkpoint databases (apps/langgraph).
+**/*.db

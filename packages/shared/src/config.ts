@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /** Which agent backend the API serves chat from (`CHAT_BACKEND` on the API). */
-export const ChatBackendSchema = z.enum(['inkeep', 'parlant']);
+export const ChatBackendSchema = z.enum(['inkeep', 'parlant', 'langgraph']);
 export type ChatBackend = z.infer<typeof ChatBackendSchema>;
 export const DEFAULT_CHAT_BACKEND: ChatBackend = 'inkeep';
 

@@ -5,6 +5,7 @@ import { ChatModule } from './chat/chat.module.js';
 import { AppConfigModule } from './config/config.module.js';
 import { HealthModule } from './health/health.module.js';
 import { IntakeModule } from './intake/intake.module.js';
+import { LangGraphModule } from './langgraph/langgraph.module.js';
 import { ParlantModule } from './parlant/parlant.module.js';
 import { SearchModule } from './search/search.module.js';
 import { TripsModule } from './trips/trips.module.js';
@@ -16,7 +17,8 @@ import { TripsModule } from './trips/trips.module.js';
       isGlobal: true,
       envFilePath: ['.env', '../../.env'],
     }),
-    // CHAT_BACKEND picks the agent backend: /api/chat (Inkeep) or /api/parlant/*.
+    // CHAT_BACKEND picks the agent backend: /api/chat (Inkeep), /api/parlant/*
+    // or /api/langgraph/*.
     ConditionalModule.registerWhen(
       ChatModule,
       (env) => chatBackend(env) === 'inkeep',
@@ -24,6 +26,10 @@ import { TripsModule } from './trips/trips.module.js';
     ConditionalModule.registerWhen(
       ParlantModule,
       (env) => chatBackend(env) === 'parlant',
+    ),
+    ConditionalModule.registerWhen(
+      LangGraphModule,
+      (env) => chatBackend(env) === 'langgraph',
     ),
     AppConfigModule,
     HealthModule,

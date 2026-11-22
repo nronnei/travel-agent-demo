@@ -41,6 +41,7 @@ Expects (dict "root" $ "component" "api" "values" .Values.api "env" (dict ...)),
 plus an optional "envFromSecret" naming a Secret whose keys all become env vars,
 optional "volumes" / "volumeMounts" lists, and an optional "strategy" (the
 Deployment's rollout strategy, e.g. Recreate for a ReadWriteOnce volume).
+.values.podSecurityContext, if set, becomes the pod's securityContext.
 Entries in .values.env override the computed "env".
 */}}
 {{- define "travel-agent.deployment" -}}
@@ -69,6 +70,10 @@ spec:
         {{- include "travel-agent.labels" $root | nindent 8 }}
         app.kubernetes.io/component: {{ .component }}
     spec:
+      {{- with $v.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with $root.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
