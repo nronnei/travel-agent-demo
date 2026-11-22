@@ -813,7 +813,7 @@ None right now. Open questions 0–3 from rev 2 were answered in rev 3 (see the 
 
 ## Implementation notes
 
-Steps 1–11 and 13 are done. Step 12 (old Inkeep databases removed) waits for the soak, until 2026-11-29. Steps 11 and (Inkeep rehearsal and cutover) and 12 (old Inkeep databases removed) touch live systems and wait for the user's go-ahead.
+Steps 1–11 and 13 are done. Step 12 (removing the old Inkeep databases) waits for the soak, until 2026-11-29.
 
 Deviations from the plan, with reasons:
 - **Steps 3 and 4 were done together.** The store interface went in with all its methods (`touch`, `setParlantSession`, `clearParlantSession`) at once, and the Postgres store with it, rather than a memory-only refactor first.
