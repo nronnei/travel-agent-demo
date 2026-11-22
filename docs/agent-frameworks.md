@@ -72,6 +72,24 @@ backend has its own chat engine (`apps/web/src/chat/`) behind the same
 | Models                 | Haiku 5.5 for intake (data components need forced tool choice, which Sonnet 5.5 rejects) and Sonnet 5.5 for planning                                                                     | `Effort.HIGH`: Sonnet 5.5 for replies, Haiku 5.5 for rule matching and review                                                                                                                                                                                 | Sonnet 5.5 for both. Widgets are ordinary tool calls with `tool_choice: auto`, so Sonnet works for intake. Thinking set to `between_tools` (Sonnet 5.5 rejects `disabled`)                                                                                                                                                                      |
 | Web search             | An `mcpTool` on the planner, calling the API's MCP server (`POST /api/mcp`) with a Bearer token from Inkeep's memory credential store. The model sees the MCP server's tool description. | A `web_search` tool on the `trip-planning` policy, calling `POST /api/search/web` over REST (Parlant's MCP client can't send auth headers). It emits a `custom` event as it starts, so the app can show "Searching the web…" before the `tool` event arrives. | A `web_search` tool (LangChain `tool()`, run by a `ToolNode`) calling `POST /api/search/web` over REST. Sources ride in the ToolMessage `artifact`, which the model never sees. At most three searches per reply, enforced in code                                                                                                              |
 
+### Prompts: LangGraph against Inkeep
+
+`apps/langgraph/src/prompts.ts` mirrors the Inkeep prompt
+(`apps/agents/src/projects/travel-agent/agents/travel-agent.ts`): the same
+purpose, style and tone, unbreakable rules, intake order and search guidance.
+It's kept in step by hand. It differs where LangGraph does the job in code, or
+where the live runs showed a problem.
+
+|                        | Inkeep                                                                                                 | LangGraph                                                                                                                                                 | Why                                                                                                                                                                                                                                                                                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Widgets                | "Emit the InterestPicker / TripBrief component" (data components)                                      | "Call `suggest_interests` / `present_brief`" (ordinary tool calls)                                                                                        | Data components force a tool call, which Sonnet 5.5 rejects, so Inkeep's intake runs on Haiku. Plain tool calls let intake run on Sonnet.                                                                                                                                                                    |
+| Widget answers         | Arrive as guest messages ("I'd like the trip to focus on: …")                                          | Come back as the tool's result, plus the guest's words as a message                                                                                       | The graph pauses on the widget and resumes with the structured answer.                                                                                                                                                                                                                                       |
+| Hand-off               | "When the guest says … transfer to the travel planner"                                                 | No transfer rule. The intake prompt says the planner "takes over automatically"; the planner prompt says to open with one short line after a confirmation | The graph routes to the planner on `briefConfirmed`, read from the intake API, so the model doesn't decide.                                                                                                                                                                                                  |
+| Brief edits in the app | A note prepended to the next message ("[I've edited the trip brief myself…]") and a rule explaining it | A "What the guest has entered so far" section, filled from the intake record                                                                              | As with Parlant, the app saves edits to the intake record before sending, and every run reloads it.                                                                                                                                                                                                          |
+| Guest details          | Template placeholders filled by Inkeep's context fetcher                                               | `intakePrompt(intake)` / `plannerPrompt(intake)`, plain functions called on every model call                                                              | `loadIntake` reads the record at the start of each run.                                                                                                                                                                                                                                                      |
+| Narration              | Nothing                                                                                                | "Everything you write is shown to the guest", plus the exact line to say with each widget                                                                 | In live runs the intake told the guest "The purpose is general, so I'll show the interest picker." The general rule alone still let it happen about one turn in five; pinned lines stopped it. Inkeep's components are part of the reply, so there's no tool step to narrate. Parlant uses canned responses. |
+| Search                 | "At most three searches per reply"                                                                     | The same line, plus a line before searching ("Let me check what's on that week.") and a note that the intake's tools are finished                         | The cap is also enforced in code (`tool_choice: none` after three). The planner sees the intake's widget calls as text in its history.                                                                                                                                                                       |
+
 ## Findings while building
 
 - **Parlant 4.0.5 has no journeys and no strict canned-response mode.**
@@ -190,6 +208,58 @@ What this means here:
   steal it. None of the three frameworks provides this. Each would have to sit
   behind one.
 
+## Guest data and the model
+
+Logged 2026-11-22. Nothing is handled yet beyond a prompt rule, but this is a
+key trade-off between the frameworks. Here, "address" means the form of
+address ("Dr Lima", or the full name). No postal address is collected.
+
+**What reaches the model today.** Every backend sends the guest's real details
+in the prompt, because the agent addresses them by name. Templates and
+variables are filled in before the model call, so the model never sees a
+placeholder.
+
+|                            | Inkeep 0.80.4                                                             | Parlant 4.0.5                                                       | LangGraph.js 1.7.5                                                                               |
+| -------------------------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Guest fields in the prompt | `address`, `givenName`, destination, purpose, interests (context fetcher) | `address`, destination, purpose, interests (`guest_brief` variable) | `address`, `givenName`, destination, purpose, interests (`intakePrompt` / `plannerPrompt`)       |
+| Guest's own messages       | Sent as typed                                                             | Sent as typed                                                       | Sent as typed                                                                                    |
+| Where it's stored          | Inkeep's own database (conversation history)                              | Session events in SQLite under `PARLANT_HOME`                       | Checkpoints in SQLite, including the whole intake record (surname and title too), with no expiry |
+| Back to the browser        | The reply stream                                                          | The session event stream                                            | The run stream; `values` events carry the whole graph state, intake record included              |
+
+**Where each framework lets us intervene.** Two measures would cover most of
+the risk:
+
+- **Pseudonymize the name.** The model sees a placeholder such as `⟦GUEST⟧`,
+  and the real name goes back in on the way to the browser.
+- **Redact free text.** Run a PII detector, such as Microsoft Presidio or a
+  guardrail model, over guest messages, which carry far more than the name.
+
+|                                 | Inkeep                                                                                                                                                         | Parlant                                                                                      | LangGraph                                                                                                                                           |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Placeholder going in            | Easy: the API serves the context fetcher (`/api/intake/:id/context`), so it can return the placeholder.                                                        | Easy: the `guest_brief` tool reads the same API route.                                       | Easy: in our prompt functions, or in `loadIntake`.                                                                                                  |
+| Real name going out             | Hard: the Nest proxy would rewrite Inkeep's AI SDK stream, where a placeholder can be split across chunks. Widgets come from the model, so they'd need it too. | Hard: the passthrough would rewrite message events as they grow; the same splitting problem. | Moderate: our server's SSE serializer can swap it before sending. A placeholder can still be split across message chunks, but we own the buffering. |
+| Keeping the name out of storage | No: Inkeep stores the conversation itself.                                                                                                                     | Partly: depends on what Parlant persists for variables and tool results.                     | Yes: don't keep the real name in graph state, and pseudonymize before it's checkpointed.                                                            |
+| Free-text redaction             | In the Nest proxy, before the message is forwarded (the API already builds the upstream body).                                                                 | In the Nest passthrough, before the message event is posted.                                 | In the Nest passthrough, or in the graph as a first node.                                                                                           |
+| Search queries (to Tavily)      | In the API's search service: one place for all three.                                                                                                          | Same.                                                                                        | Same.                                                                                                                                               |
+
+**What this means.**
+
+- **The Nest API is the natural place for inbound guardrails.** Every guest
+  message and every search query passes through it, so one free-text redaction
+  covers all three frameworks.
+- **Outbound is where the frameworks differ.** Putting the real name back,
+  and keeping it out of storage, is natural in LangGraph, because we own the
+  server and the state. In Inkeep and Parlant it means rewriting their streams
+  from outside, and accepting what they store.
+- **The cost of pseudonymizing:** the model loses whatever the name itself
+  tells it, such as the language of a name or a formal address in another
+  language. For greetings that's minor.
+- **Measures that need no framework support:**
+  - the provider's data terms: no training on API data by default, and zero
+    data retention available;
+  - pruning stored conversations;
+  - keeping third-party tracing off.
+
 ## Comparing
 
 Run the same script on every backend:
@@ -210,7 +280,8 @@ Note for each run:
 - the model calls per turn;
 - the searches per turn, and whether the "Searching the web…" row appears;
 - how easy each one was to author and debug;
-- how each one handles the credentials its tools need (see above).
+- how each one handles the credentials its tools need (see above);
+- where each one lets you keep guest data from the model and out of storage (see above).
 
 ## Eval log
 
