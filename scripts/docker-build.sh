@@ -9,7 +9,7 @@ REGISTRY="${REGISTRY:-code.honnei.house/admin}"
 TAG="${1:-latest}"
 PUSH="${2:-}"
 
-for app in api web; do
+for app in api web langgraph; do
   image="${REGISTRY}/travel-agent-${app}:${TAG}"
   echo "==> Building ${image}"
   docker build --platform linux/amd64 --target runtime \

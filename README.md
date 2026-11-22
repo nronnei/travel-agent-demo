@@ -34,6 +34,10 @@ Other tasks run across every workspace through Turbo: `npm run build`, `lint`,
 
 ## Chat agent (Inkeep)
 
+The same agent is also built on Parlant (`apps/parlant`) and LangGraph.js
+(`apps/langgraph`), for comparison; the API's `CHAT_BACKEND` picks one. See
+[docs/agent-frameworks.md](docs/agent-frameworks.md).
+
 The chat panel is backed by a self-hosted [Inkeep](https://github.com/inkeep/agents)
 agent. The browser posts to `/api/chat`; the Nest API forwards it to Inkeep's run API
 with a server-side secret and streams the reply back (Vercel AI SDK `useChat` format).

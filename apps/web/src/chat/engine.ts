@@ -1,4 +1,4 @@
-import type { TripBriefProps } from '@travel-agent/shared';
+import type { TripBriefProps, WidgetAnswer } from '@travel-agent/shared';
 import type { UIMessage } from 'ai';
 
 /** Options for one guest turn sent to the agent. */
@@ -7,6 +7,11 @@ export interface SendOptions {
   key: string | undefined;
   /** A brief the guest edited in the app that the agent hasn't seen yet. */
   brief: TripBriefProps | null;
+  /**
+   * The structured form of a widget answer, sent alongside the same text.
+   * LangGraph resumes its paused widget with it; the other engines ignore it.
+   */
+  answer?: WidgetAnswer;
 }
 
 /**

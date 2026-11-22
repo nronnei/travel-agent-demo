@@ -1,0 +1,46 @@
+{{- if .Values.langgraph.enabled -}}
+{{- $ctx := dict "root" . "component" "langgraph" "values" .Values.langgraph -}}
+{{- $dataDir := "/var/lib/langgraph" -}}
+{{- $env := dict
+  "PORT" .Values.langgraph.containerPort
+  "LANGGRAPH_DB" (printf "%s/checkpoints.db" $dataDir)
+  "LANGGRAPH_INTAKE_MODEL" .Values.langgraph.models.intake
+  "LANGGRAPH_PLANNING_MODEL" .Values.langgraph.models.planning
+  "INTAKE_API_URL" (printf "http://%s:%v" (include "travel-agent.componentName" (dict "root" . "component" "api")) .Values.api.service.port)
+-}}
+{{- $data := dict "name" "langgraph-data" -}}
+{{- if .Values.langgraph.persistence.enabled -}}
+{{- $_ := set $data "persistentVolumeClaim" (dict "claimName" (include "travel-agent.componentName" $ctx)) -}}
+{{- /* A ReadWriteOnce volume can't be mounted by the old and new pod at once. */ -}}
+{{- $_ := set $ctx "strategy" (dict "type" "Recreate") -}}
+{{- else -}}
+{{- $_ := set $data "emptyDir" (dict) -}}
+{{- end -}}
+{{- $volumes := list $data (dict "name" "tmp" "emptyDir" (dict)) -}}
+{{- $mounts := list (dict "name" "langgraph-data" "mountPath" $dataDir) (dict "name" "tmp" "mountPath" "/tmp") -}}
+{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.langgraph.existingSecret "volumes" $volumes "volumeMounts" $mounts) $ctx) }}
+---
+{{ include "travel-agent.service" $ctx }}
+{{- end }}
+{{- /*
+The volume follows persistence, not enabled: in dev, Tilt turns off the agent
+that isn't selected, and its saved conversations should survive the switch.
+*/ -}}
+{{- if .Values.langgraph.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "travel-agent.componentName" (dict "root" . "component" "langgraph") }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: langgraph
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.langgraph.persistence.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.langgraph.persistence.size }}
+{{- end }}

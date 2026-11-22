@@ -1,0 +1,32 @@
+{
+  "name": "@travel-agent/langgraph",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "The travel agent built on LangGraph.js, for comparison with the Inkeep and Parlant agents",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
+    "start": "node dist/main.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "oxlint --type-aware src/ test/",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@langchain/anthropic": "^1.6.6",
+    "@langchain/core": "^1.5.0",
+    "@langchain/langgraph": "^1.7.5",
+    "@langchain/langgraph-checkpoint": "^1.2.3",
+    "@langchain/langgraph-checkpoint-sqlite": "^1.1.1",
+    "@travel-agent/shared": "*",
+    "fastify": "^5.12.8",
+    "zod": "~4.5.4"
+  },
+  "devDependencies": {
+    "@langchain/langgraph-sdk": "^1.17.0",
+    "@types/node": "^26.6.6",
+    "oxlint-tsgolint": "^7.0.2001",
+    "tsx": "^4.23.15",
+    "vitest": "^4.1.2"
+  }
+}

@@ -18,9 +18,18 @@ import {
   type IntakeComponentData,
   type NamePrefix,
   type TripBriefProps,
+  type WidgetAnswer,
 } from '@travel-agent/shared';
 import type { UIMessage } from 'ai';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  Suspense,
+  lazy,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { Composer, type ComposerMode } from './Composer';
 import {
   IntakeComponentView,
@@ -236,7 +245,7 @@ function editAnswer(
     : `Let's make it ${value}.`;
 }
 
-/** The chat screen, shared by both agent backends; `engine` talks to the agent. */
+/** The chat screen, shared by every agent backend; `engine` talks to the agent. */
 export function ChatView({ engine }: { engine: ChatEngine }) {
   const {
     id: chatId,
@@ -290,13 +299,13 @@ export function ChatView({ engine }: { engine: ChatEngine }) {
   }
 
   /** A turn for the intake/planner agents, with any brief edits they haven't seen. */
-  function send(text: string, brief = editedBrief) {
+  function send(text: string, brief = editedBrief, answer?: WidgetAnswer) {
     if (!text || busy) return;
     clearError();
     setLocalError(null);
     setPlaceholder(undefined);
     setEditedBrief(null);
-    engine.send(text, { key: conversationKey.current, brief });
+    engine.send(text, { key: conversationKey.current, brief, answer });
   }
 
   /** Shows a brief the guest edited locally (no agent turn). */
@@ -382,7 +391,10 @@ export function ChatView({ engine }: { engine: ChatEngine }) {
         say(interestsAnswer(labels));
         showBrief(brief);
       } else {
-        send(interestsAnswer(labels));
+        send(interestsAnswer(labels), editedBrief, {
+          type: 'interests',
+          labels,
+        });
       }
     },
     onEditBrief(field, brief) {
@@ -416,7 +428,7 @@ export function ChatView({ engine }: { engine: ChatEngine }) {
         // so no edit note: the intake agent expects this message verbatim.
         await confirmTrip(chatId, brief, conversationKey.current);
         setSaving(false);
-        send(BRIEF_CONFIRMED_MESSAGE, null);
+        send(BRIEF_CONFIRMED_MESSAGE, null, { type: 'confirm' });
       } catch (err) {
         setSaving(false);
         setLocalError(err instanceof Error ? err.message : String(err));
@@ -520,7 +532,16 @@ function ParlantChat() {
   return <ChatView engine={useParlantEngine()} />;
 }
 
+const LangGraphChat = lazy(() => import('./LangGraphChat'));
+
 /** The chat, on whichever agent backend the API is configured for. */
 export function Chat({ backend }: { backend: ChatBackend }) {
-  return backend === 'parlant' ? <ParlantChat /> : <InkeepChat />;
+  if (backend === 'parlant') return <ParlantChat />;
+  if (backend === 'langgraph')
+    return (
+      <Suspense fallback={<Spinner />}>
+        <LangGraphChat />
+      </Suspense>
+    );
+  return <InkeepChat />;
 }

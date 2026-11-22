@@ -11,15 +11,22 @@ import {
   type TripBriefProps,
 } from '@travel-agent/shared';
 
-interface IntakeRecord {
+export interface IntakeRecord {
   /** SHA-256 of the conversation key handed to the browser that claimed it. */
   keyHash: Buffer;
+  /**
+   * The LangGraph thread for this claim, minted with it. Conversation ids are
+   * chosen by the browser and can be claimed again once this record is gone
+   * (restart, eviction), while LangGraph's checkpoints outlive it; a fresh
+   * thread per claim keeps a reclaimed id from reading an earlier guest's thread.
+   */
+  threadId: string;
   identity: GuestIdentity;
   /** Set only once the guest confirms the brief. */
   trip?: TripBriefProps;
   /**
-   * The latest unconfirmed brief, written by the Parlant agent when it shows
-   * one and by the app when the guest edits it. Inkeep never sets it.
+   * The latest unconfirmed brief, written by the Parlant and LangGraph agents
+   * when they show one and by the app when the guest edits it. Inkeep never sets it.
    */
   draft?: TripBriefProps;
 }
@@ -58,7 +65,11 @@ export class IntakeService {
       return {};
     }
     const conversationKey = randomBytes(32).toString('base64url');
-    this.store(conversationId, { keyHash: hash(conversationKey), identity });
+    this.store(conversationId, {
+      keyHash: hash(conversationKey),
+      threadId: randomBytes(16).toString('base64url'),
+      identity,
+    });
     return { conversationKey };
   }
 

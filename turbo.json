@@ -25,6 +25,7 @@
         "INKEEP_*",
         "INTAKE_*",
         "PARLANT_*",
+        "LANGGRAPH_*",
         "ANTHROPIC_API_KEY",
         "VOYAGE_API_KEY",
         "TAVILY_API_KEY",

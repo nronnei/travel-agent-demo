@@ -33,3 +33,12 @@ parlant:
   persistence:
     enabled: true
     storageClassName: longhorn
+
+# Runs alongside the others in dev; `tilt up -- --chat-backend=langgraph` points the API at it.
+langgraph:
+  enabled: true
+  securityContext: null
+  # Keeps conversation checkpoints across pod restarts.
+  persistence:
+    enabled: true
+    storageClassName: longhorn

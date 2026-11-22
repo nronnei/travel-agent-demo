@@ -1,3 +1,9 @@
+{{- if and (eq .Values.chat.backend "langgraph") (not .Values.langgraph.enabled) -}}
+{{- fail "chat.backend is langgraph, so set langgraph.enabled=true (the API has no LangGraph service to talk to)" -}}
+{{- end -}}
+{{- if and (eq .Values.chat.backend "parlant") (not .Values.parlant.enabled) -}}
+{{- fail "chat.backend is parlant, so set parlant.enabled=true (the API has no Parlant service to talk to)" -}}
+{{- end -}}
 {{- $ctx := dict "root" . "component" "api" "values" .Values.api -}}
 {{- $env := dict "PORT" .Values.api.containerPort -}}
 {{- with .Values.inkeep -}}
@@ -12,6 +18,9 @@
 {{- if .Values.parlant.enabled -}}
 {{- $_ := set $env "PARLANT_API_URL" (printf "http://%s:%v" (include "travel-agent.componentName" (dict "root" . "component" "parlant")) .Values.parlant.service.port) -}}
 {{- $_ := set $env "PARLANT_AGENT_ID" .Values.parlant.agentId -}}
+{{- end -}}
+{{- if .Values.langgraph.enabled -}}
+{{- $_ := set $env "LANGGRAPH_API_URL" (printf "http://%s:%v" (include "travel-agent.componentName" (dict "root" . "component" "langgraph")) .Values.langgraph.service.port) -}}
 {{- end -}}
 {{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.inkeep.existingSecret) $ctx) }}
 ---
