@@ -639,11 +639,19 @@ spec: { cluster: { name: inkeep-db }, name: spicedb, owner: spicedb, databaseRec
   5. **Restore SpiceDB** through local sockets, so no password reaches a pod spec or shell history:
      ```
      kubectl -n inkeep exec inkeep-spicedb-postgres-0 -- pg_dump -Fc -U spicedb spicedb \
-       | kubectl -n inkeep exec -i inkeep-db-1 -- pg_restore --no-owner --no-acl --role=spicedb -U postgres -d spicedb
+       | kubectl -n inkeep exec -i inkeep-db-1 -c postgres -- pg_restore --no-owner --no-acl --role=spicedb -U postgres -d spicedb
      ```
+     Wait for `kubectl -n inkeep get database inkeep-db-spicedb` to show applied first: its first attempt races the role's creation, and the operator retries within about 30 s.
+  5b. **Repair SpiceDB's transaction IDs** (found in the rehearsal). SpiceDB's Postgres datastore decides what's visible by transaction ID (`relation_tuple.created_xid`). Restored rows keep the old server's IDs (up to about 340,000), which are ahead of the new server's counter, so SpiceDB can't see them: the rehearsal read 0 of the 4 `project` relationships. Run SpiceDB's own repair against the new database before SpiceDB starts. It took under 2 s:
+     ```
+     kubectl -n inkeep run spicedb-repair --rm -i --restart=Never --image=authzed/spicedb:v1.49.2 \
+       --overrides='{"spec":{"enableServiceLinks":false,"nodeSelector":{"kubernetes.io/arch":"amd64"},"containers":[{"name":"spicedb-repair","image":"authzed/spicedb:v1.49.2","args":["datastore","repair","transaction-ids"],"env":[{"name":"PW","valueFrom":{"secretKeyRef":{"name":"inkeep-db-spicedb","key":"password"}}},{"name":"SPICEDB_DATASTORE_ENGINE","value":"postgres"},{"name":"SPICEDB_DATASTORE_CONN_URI","value":"postgres://spicedb:$(PW)@inkeep-db-rw:5432/spicedb?sslmode=require"}]}]}}'
+     ```
+     It should log `completed revisions repair`. Then `select pg_current_xact_id()` on `inkeep-db` (database `spicedb`) must be above `select max(created_xid::text::bigint) from relation_tuple`.
   6. Spot-check row counts, old against new (`\dt` first; for example the conversations table in `inkeep_agents`, and `relation_tuple` in `spicedb`).
   7. `kubectl patch` the two keys in `inkeep-secrets` (see the Design section), then `helm upgrade --install inkeep … -f helm-values/inkeep.yaml`. Check that every Deployment is back at its noted replica count.
   8. Smoke test:
+     - SpiceDB reads every relationship: compare `POST /v1/relationships/read` counts by `resourceType` (`organization`, `project`) with `relation_tuple` (port-forward `inkeep-spicedb` 8443, Bearer the preshared key);
      - log in at https://inkeep.honnei.house;
      - both travel-agent projects are visible and editable;
      - a chat on `--chat-backend=inkeep` replies;
@@ -791,6 +799,7 @@ None right now. Open questions 0–3 from rev 2 were answered in rev 3 (see the 
 - rev 4: Keep the role passwords as they are (Tilt builds them from `.env`, made by hand in prod), rather than operator client certificates, a secret-generator controller or Helm `lookup`. Those felt heavier than needed (user). Revisit a secret generator if more roles appear.
 
 ## Changelog
+- rev 6: Step 11 rehearsal done; it found the SpiceDB transaction-ID issue, and the runbook gained step 5b plus a relationship check.
 - rev 6: Step 10 (prod API database) deployed and verified.
 - rev 6: Steps 1–9 and 13 implemented and verified on the dev cluster; homelab files for steps 10–11 written (not applied). See Implementation notes.
 - rev 6: Approved by the user (2026-11-22). Implementation started on `feat/cnpg-postgres` from `main` at e7600be.
@@ -826,6 +835,13 @@ Step 10, prod (2026-11-22; the user applied the policy and alerts and ran `npm r
 - `travel-agent-db` is healthy in `travel-agent`; the API retried for about 45 s while it bootstrapped, then logged "Connected; migrations applied";
 - an intake claimed on https://travel.honnei.house still authorized after `rollout restart` (wrong key: 403), and the API connects with TLSv1.3; the test row was deleted;
 - Prometheus scrapes `travel-agent-db-1` through `travel-agent-db-policy`, and both CNPG alert rules are loaded (inactive).
+
+Step 11 rehearsal (2026-11-22, on a throwaway `inkeep-db-test`, with the live Inkeep untouched):
+- The old run DB uses only `plpgsql`, and `appuser` is its only role (a superuser). The import brought over 52 tables in `drizzle` and `public`, all owned by the non-superuser `inkeep` role, with matching row counts on the largest tables.
+- `agents-migrate` 0.80.4 ran cleanly against the imported DB as `inkeep` (manage and run migrations, auth init), with no permission errors. Like every rollout, it also re-applied the SpiceDB schema and the admin relationship on the live SpiceDB; both are idempotent.
+- The SpiceDB restore (PG 16 → 18) gave 7 tables owned by `spicedb` and matching counts, and `migrate head` and `serve` (1.49.2) ran over TLS as `spicedb`. **But SpiceDB saw 0 of the 4 `project` relationships**: the restored `created_xid` values (about 204k) were ahead of the new server's transaction counter (about 1k). `spicedb datastore repair transaction-ids` advanced the counter past them (to 339,988, in under 2 s), and a fresh SpiceDB then read all 5 relationships. The runbook now has this as step 5b, plus a relationship-count check in the smoke test.
+- The `spicedb` `Database` raced its role again, and applied on the operator's retry after about 30 s.
+- All rehearsal resources (pods, the cluster, its Secret and PVC) were deleted afterwards.
 
 Verified on the dev cluster (2026-11-22):
 - the cluster is healthy; the API logged "Connected; migrations applied" after retrying while the cluster bootstrapped;

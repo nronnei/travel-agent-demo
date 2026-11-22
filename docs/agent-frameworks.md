@@ -139,8 +139,13 @@ with a database and role per service (docs/plans/2026-11-22-cnpg-postgres.md).
   - The transient adapter isn't a faithful reference: it keeps duplicate ids on
     insert and skips document loaders.
 - **Inkeep** needs the most infrastructure: Doltgres can't move, and its run DB
-  connection role is no longer a superuser after the move, so the cutover is
-  rehearsed against a throwaway cluster first (plan step 11).
+  connection role is no longer a superuser after the move, so the cutover was
+  rehearsed against a throwaway cluster first (plan step 11). Inkeep's migrations
+  were fine as a non-superuser. **SpiceDB wasn't, at first:** its Postgres datastore
+  decides visibility by transaction ID, so after a `pg_dump`/`pg_restore` onto a new
+  server the restored relationships were invisible (their IDs were ahead of the new
+  server's counter) until `spicedb datastore repair transaction-ids` ran. Anything
+  that moves a SpiceDB Postgres datastore needs that step, and nothing errors without it.
 
 ### LangGraph.js 1.7.5
 
