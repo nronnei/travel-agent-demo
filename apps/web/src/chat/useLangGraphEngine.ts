@@ -54,6 +54,11 @@ export function useLangGraphEngine(): ChatEngine {
     // A browser-side label only: the API runs the thread minted for this claim.
     threadId: id,
     messagesKey: 'messages',
+    // Batch store updates. A reply that follows a tool call arrives in one
+    // burst (Anthropic holds it back), and unthrottled, each of its ~200
+    // chunks re-rendered synchronously within one task, so React hit
+    // "Maximum update depth exceeded" after every search.
+    throttle: true,
     onCustomEvent: (data: unknown) => {
       if ((data as { type?: string } | null)?.type === WEB_SEARCH_EVENT_TYPE)
         setSearching(true);

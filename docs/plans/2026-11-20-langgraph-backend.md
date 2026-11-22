@@ -375,6 +375,7 @@ Run in the session scratchpad against `@langchain/langgraph` 1.7.5, `@langchain/
     - The dev script loads the repo `.env`.
     - A new `LANGGRAPH_INTAKE_API_URL` wins over `INTAKE_API_URL`, which in `.env` is Inkeep's container address.
     - `.env.example` sets both URLs.
+- **Browser loop after searches (found 2026-11-22, after the commit):** "Maximum update depth exceeded" on every search turn. The answer after a search arrives in one burst (~200 chunks in one network read); the SDK's store notified React synchronously for each, and the engine's merge effect set state each time, so React counted more than 50 nested updates in one task. Fixed with `useStream({ throttle: true })`, which batches store notifications; checked in the browser on dev (search turn renders with source chips, no errors).
 - **Not added:** a `config.controller` test for `langgraph` (the controller has no spec today; `chatBackend()` parsing is covered by the shared schema and the live `/api/config` check).
 
 ## Verification
