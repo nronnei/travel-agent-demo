@@ -2,6 +2,7 @@ import { SNIPPET_MAX_CHARS, type WebSearchResult } from '@travel-agent/shared';
 import {
   ProviderError,
   type ProviderRequest,
+  type ProviderResult,
   type SearchProvider,
 } from './search.provider.js';
 
@@ -38,6 +39,7 @@ export class TavilyProvider implements SearchProvider {
       include_answer: false,
       include_raw_content: false,
       include_published_date: true,
+      include_usage: true,
     };
     if (req.recencyDays !== undefined) {
       const since = new Date(this.now().getTime() - req.recencyDays * DAY_MS);
@@ -49,15 +51,17 @@ export class TavilyProvider implements SearchProvider {
   async search(
     req: ProviderRequest,
     signal: AbortSignal,
-  ): Promise<WebSearchResult[]> {
+  ): Promise<ProviderResult> {
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${this.apiKey}`,
+      'content-type': 'application/json',
+    };
+    if (req.projectId) headers['x-project-id'] = req.projectId;
     let res: Response;
     try {
       res = await fetch(TAVILY_URL, {
         method: 'POST',
-        headers: {
-          authorization: `Bearer ${this.apiKey}`,
-          'content-type': 'application/json',
-        },
+        headers,
         body: JSON.stringify(this.requestBody(req)),
         signal,
       });
@@ -74,16 +78,22 @@ export class TavilyProvider implements SearchProvider {
       await res.body?.cancel().catch(() => undefined);
       throw new ProviderError(res.status);
     }
-    let json: { results?: unknown };
+    let json: { results?: unknown; usage?: { credits?: unknown } };
     try {
-      json = (await res.json()) as { results?: unknown };
+      json = (await res.json()) as typeof json;
     } catch {
       throw new ProviderError(res.status);
     }
     const results = Array.isArray(json.results)
       ? (json.results as TavilyResult[])
       : [];
-    return results.flatMap(toResult).slice(0, req.maxResults);
+    const out: ProviderResult = {
+      results: results.flatMap(toResult).slice(0, req.maxResults),
+    };
+    const credits = json.usage?.credits;
+    if (typeof credits === 'number' && Number.isFinite(credits) && credits >= 0)
+      out.credits = credits;
+    return out;
   }
 }
 

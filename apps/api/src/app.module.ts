@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConditionalModule, ConfigModule } from '@nestjs/config';
 import { chatBackend } from '@travel-agent/shared';
 import { ChatModule } from './chat/chat.module.js';
+import { TelemetryShutdown } from './common/telemetry.js';
 import { DatabaseModule } from './database/database.module.js';
 import { AppConfigModule } from './config/config.module.js';
 import { HealthModule } from './health/health.module.js';
@@ -41,5 +42,6 @@ import { TripsModule } from './trips/trips.module.js';
     SearchModule,
     TripsModule,
   ],
+  providers: [TelemetryShutdown],
 })
 export class AppModule {}

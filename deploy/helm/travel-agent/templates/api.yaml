@@ -43,6 +43,7 @@
 {{- if $secretEnv -}}
 {{- $_ := set $extra "secretEnv" $secretEnv -}}
 {{- end -}}
+{{- $_ := include "travel-agent.otelEnv" (dict "root" . "env" $env "service" "travel-agent-api" "runtime" "node") -}}
 {{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.inkeep.existingSecret) $extra $ctx) }}
 ---
 {{ include "travel-agent.service" $ctx }}

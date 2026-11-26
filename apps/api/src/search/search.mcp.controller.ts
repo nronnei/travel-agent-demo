@@ -14,9 +14,12 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
+  SEARCH_CLIENT_HEADER,
   WEB_SEARCH_TOOL_DESCRIPTION,
   WEB_SEARCH_TOOL_NAME,
   WebSearchRequestSchema,
+  toSearchClient,
+  type SearchClient,
 } from '@travel-agent/shared';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { SearchTokenGuard } from './search-token.guard.js';
@@ -40,7 +43,10 @@ export class SearchMcpController {
 
   @Post()
   async handle(@Req() req: FastifyRequest, @Res() reply: FastifyReply) {
-    const server = this.server();
+    // Only Inkeep calls this route, so it's the default label.
+    const server = this.server(
+      toSearchClient(req.headers[SEARCH_CLIENT_HEADER], 'inkeep'),
+    );
     const transport = new StreamableHTTPServerTransport({
       sessionIdGenerator: undefined,
       enableJsonResponse: true,
@@ -66,7 +72,7 @@ export class SearchMcpController {
     return methodNotAllowed();
   }
 
-  private server(): McpServer {
+  private server(client: SearchClient): McpServer {
     const server = new McpServer({ name: 'travel-search', version: '1.0.0' });
     server.registerTool(
       WEB_SEARCH_TOOL_NAME,
@@ -76,7 +82,7 @@ export class SearchMcpController {
       },
       async (args): Promise<CallToolResult> => {
         try {
-          const response = await this.search.search(args);
+          const response = await this.search.search(args, client);
           return {
             content: [{ type: 'text', text: JSON.stringify(response) }],
           };

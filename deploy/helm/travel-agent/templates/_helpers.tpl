@@ -216,3 +216,35 @@ mount:
   mountPath: /etc/postgres-ca
   readOnly: true
 {{- end }}
+
+{{/*
+OpenTelemetry env for one service, set into the given $env dict when
+otel.enabled. Values-level `<component>.env` entries are merged later in
+travel-agent.deployment and win.
+Usage: {{- $_ := include "travel-agent.otelEnv" (dict "root" . "env" $env "service" "travel-agent-api" "runtime" "node") -}}
+*/}}
+{{- define "travel-agent.otelEnv" -}}
+{{- $o := .root.Values.otel -}}
+{{- if $o.enabled -}}
+{{- if not $o.endpoint -}}{{- fail "otel.enabled needs otel.endpoint" -}}{{- end -}}
+{{- $ns := ternary "travel-agent" "travel-agent-dev" (eq $o.environment "prod") -}}
+{{- $env := .env -}}
+{{- $_ := set $env "OTEL_SERVICE_NAME" .service -}}
+{{- $_ := set $env "OTEL_RESOURCE_ATTRIBUTES" (printf "service.namespace=%s,deployment.environment.name=%s" $ns $o.environment) -}}
+{{- $_ := set $env "OTEL_EXPORTER_OTLP_PROTOCOL" "http/protobuf" -}}
+{{- $_ := set $env "OTEL_PROPAGATORS" "tracecontext" -}}
+{{- $_ := set $env "OTEL_TRACES_SAMPLER" $o.tracesSampler -}}
+{{- $_ := set $env "OTEL_METRIC_EXPORT_INTERVAL" (toString $o.metricExportIntervalMs) -}}
+{{- if eq .runtime "node" -}}
+{{- $_ := set $env "OTEL_EXPORTER_OTLP_ENDPOINT" $o.endpoint -}}
+{{- $_ := set $env "OTEL_TRACES_EXPORTER" "otlp" -}}
+{{- $_ := set $env "OTEL_METRICS_EXPORTER" "otlp" -}}
+{{- $_ := set $env "OTEL_LOGS_EXPORTER" "none" -}}
+{{- $_ := set $env "OTEL_NODE_DISABLED_INSTRUMENTATIONS" "nestjs-core,dns,net" -}}
+{{- else -}}
+{{- $_ := set $env "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" (printf "%s/v1/traces" (trimSuffix "/" $o.endpoint)) -}}
+{{- $_ := set $env "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT" (printf "%s/v1/metrics" (trimSuffix "/" $o.endpoint)) -}}
+{{- $_ := set $env "TRACELOOP_TRACE_CONTENT" "false" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

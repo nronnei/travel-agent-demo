@@ -34,6 +34,7 @@ async def test_posts_the_query_with_the_bearer_token():
     assert res.results[1].publishedAt is None
     request = route.calls.last.request
     assert request.headers["authorization"] == "Bearer tok"
+    assert request.headers["x-search-client"] == "parlant"
     assert json.loads(request.read()) == {
         "query": "Lisbon events June 2027",
         "maxResults": 3,
@@ -65,3 +66,11 @@ async def test_a_missing_token_does_not_raise_until_searching(monkeypatch):
     client = SearchClient.from_env()
     with pytest.raises(SearchNotConfiguredError):
         await client.search("Lisbon events")
+
+
+def test_sets_the_client_header_with_and_without_a_token():
+    with_token = SearchClient("http://api", "tok")._http.headers
+    without = SearchClient("http://api", None)._http.headers
+    assert with_token["x-search-client"] == "parlant"
+    assert without["x-search-client"] == "parlant"
+    assert "authorization" not in without

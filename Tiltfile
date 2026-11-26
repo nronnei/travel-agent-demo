@@ -19,11 +19,15 @@
 #
 # Web search is the dev kill switch: `tilt args -- --search-provider=off` makes
 # every search return 503, so both agents answer without it (default: tavily).
+#
+# OpenTelemetry export to the homelab Alloy is on by default, labelled
+# service.namespace=travel-agent-dev; turn it off with `--otel=off`.
 load('ext://namespace', 'namespace_create')
 load('ext://restart_process', 'docker_build_with_restart')
 
 config.define_string('chat-backend', usage='inkeep (default), parlant or langgraph')
 config.define_string('search-provider', usage='tavily (default) or off')
+config.define_string('otel', usage='on (default) or off: OpenTelemetry export to the homelab Alloy')
 CFG = config.parse()
 CHAT_BACKEND = CFG.get('chat-backend', 'inkeep')
 if CHAT_BACKEND not in ['inkeep', 'parlant', 'langgraph']:
@@ -34,6 +38,10 @@ LANGGRAPH = CHAT_BACKEND == 'langgraph'
 SEARCH_PROVIDER = CFG.get('search-provider', 'tavily')
 if SEARCH_PROVIDER not in ['tavily', 'off']:
     fail('--search-provider must be tavily or off, not %s' % SEARCH_PROVIDER)
+OTEL = CFG.get('otel', 'on')
+if OTEL not in ['on', 'off']:
+    fail('--otel must be on or off, not %s' % OTEL)
+OTEL_ENDPOINT = 'http://alloy.monitoring.svc.cluster.local:4318'
 
 allow_k8s_contexts('default')
 
@@ -148,6 +156,10 @@ helm_set = [
     'parlant.image.repository=' + PARLANT_IMAGE,
     'langgraph.image.repository=' + LANGGRAPH_IMAGE,
     'api.env.SEARCH_PROVIDER=' + SEARCH_PROVIDER,
+    # Always set, so the homelab (prod) values never leak prod labels into dev.
+    'otel.enabled=' + str(OTEL == 'on').lower(),
+    'otel.endpoint=' + OTEL_ENDPOINT,
+    'otel.environment=dev',
 ]
 api_secret = dev_secret('travel-agent-api-dev',
                         ['INTAKE_API_TOKEN', 'TAVILY_API_KEY', 'SEARCH_API_TOKEN',

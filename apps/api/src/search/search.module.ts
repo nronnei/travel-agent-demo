@@ -1,6 +1,7 @@
 import { Logger, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { SearchMcpController } from './search.mcp.controller.js';
+import { SearchMetrics } from './search.metrics.js';
 import { SearchController } from './search.controller.js';
 import {
   SEARCH_PROVIDER,
@@ -47,6 +48,7 @@ export function searchProvider(config: ConfigService): SearchProvider {
       useFactory: searchProvider,
       inject: [ConfigService],
     },
+    SearchMetrics,
     SearchService,
     SearchTokenGuard,
   ],

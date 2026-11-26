@@ -27,6 +27,7 @@
 {{- $volumes = append $volumes $db.volume -}}
 {{- $mounts = append $mounts $db.mount -}}
 {{- end -}}
+{{- $_ := include "travel-agent.otelEnv" (dict "root" . "env" $env "service" "travel-agent-parlant" "runtime" "parlant") -}}
 {{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.parlant.existingSecret "volumes" $volumes "volumeMounts" $mounts "secretEnv" $secretEnv) $ctx) }}
 ---
 {{ include "travel-agent.service" $ctx }}

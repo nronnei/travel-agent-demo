@@ -41,4 +41,4 @@ COPY --from=build /repo/apps/langgraph/dist apps/langgraph/dist
 USER node
 WORKDIR /repo/apps/langgraph
 EXPOSE 8900
-CMD ["node", "dist/main.js"]
+CMD ["node", "--import", "./dist/instrumentation.js", "dist/main.js"]

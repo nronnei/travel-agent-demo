@@ -11,9 +11,11 @@ import {
 import { ConfigService } from '@nestjs/config';
 import {
   WebSearchRequestSchema,
+  type SearchClient,
   type WebSearchResponse,
   type WebSearchResult,
 } from '@travel-agent/shared';
+import { SearchMetrics } from './search.metrics.js';
 import {
   ProviderError,
   SEARCH_PROVIDER,
@@ -58,6 +60,7 @@ export class SearchService {
   private readonly ratePerMinute: number;
   private readonly dailyLimit: number;
   private readonly cacheTtlMs: number;
+  private readonly projectPrefix: string;
   private tokens: number;
   private refilledAt: number;
   private day = '';
@@ -66,7 +69,10 @@ export class SearchService {
   constructor(
     @Inject(SEARCH_PROVIDER) private readonly provider: SearchProvider,
     config: ConfigService,
+    private readonly metrics: SearchMetrics,
   ) {
+    this.projectPrefix =
+      config.get<string>('TAVILY_PROJECT_PREFIX') || 'travel-agent';
     this.ratePerMinute = positiveInt(config.get('SEARCH_RATE_PER_MINUTE'), 30);
     this.dailyLimit = positiveInt(config.get('SEARCH_DAILY_LIMIT'), 500);
     this.cacheTtlMs =
@@ -79,21 +85,33 @@ export class SearchService {
     return this.provider.enabled;
   }
 
-  async search(input: unknown): Promise<WebSearchResponse> {
+  /**
+   * `client` is the calling backend. It tags the provider call, splits the
+   * cache, and labels the log line and the counters.
+   */
+  async search(
+    input: unknown,
+    client: SearchClient,
+  ): Promise<WebSearchResponse> {
     const parsed = WebSearchRequestSchema.safeParse(input);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
-    const req: ProviderRequest = parsed.data;
+    const req: ProviderRequest = {
+      ...parsed.data,
+      projectId: `${this.projectPrefix}-${client}`,
+    };
     const started = Date.now();
-    const tag = `len=${req.query.length} q=${hash(req.query)}`;
+    const tag = `client=${client} len=${req.query.length} q=${hash(req.query)}`;
 
     if (!this.provider.enabled) {
+      this.metrics.request(client, 'off');
       this.logger.warn(`search off ${tag}`);
       throw new ServiceUnavailableException('Web search is turned off');
     }
 
-    const key = cacheKey(req);
+    const key = cacheKey(req, client);
     const hit = this.cache.get(key);
     if (hit && hit.expires > started) {
+      this.metrics.request(client, 'cached');
       this.logger.log(`search cached ${tag} results=${hit.results.length}`);
       return this.response(req, hit.results);
     }
@@ -101,17 +119,20 @@ export class SearchService {
 
     const limited = this.takeToken(started);
     if (limited) {
+      this.metrics.request(client, 'limited');
       this.logger.warn(`search limited reason=${limited} ${tag}`);
       throw new SearchLimitedException(limited);
     }
 
     let results: WebSearchResult[];
+    let credits: number | undefined;
     try {
-      results = await this.provider.search(
+      ({ results, credits } = await this.provider.search(
         req,
         AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
-      );
+      ));
     } catch (err) {
+      this.metrics.request(client, 'error');
       const status =
         err instanceof ProviderError
           ? err.status
@@ -125,8 +146,10 @@ export class SearchService {
     }
 
     this.store(key, results, Date.now());
+    this.metrics.request(client, 'ok');
+    if (credits !== undefined) this.metrics.credits(client, credits);
     this.logger.log(
-      `search ok ${tag} results=${results.length} ms=${Date.now() - started}`,
+      `search ok ${tag} results=${results.length}${credits !== undefined ? ` credits=${credits}` : ''} ms=${Date.now() - started}`,
     );
     return this.response(req, results);
   }
@@ -175,9 +198,10 @@ export class SearchService {
   }
 }
 
-function cacheKey(req: ProviderRequest): string {
+/** Per backend, so each one's searches (and credits) are its own. */
+function cacheKey(req: ProviderRequest, client: SearchClient): string {
   const q = req.query.toLowerCase().replace(/\s+/g, ' ').trim();
-  return JSON.stringify([q, req.maxResults, req.recencyDays ?? null]);
+  return JSON.stringify([client, q, req.maxResults, req.recencyDays ?? null]);
 }
 
 function hash(s: string): string {

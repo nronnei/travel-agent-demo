@@ -2,13 +2,17 @@
 
 Mirrors `WebSearchResponseSchema` in packages/shared/src/search.ts. The API
 holds the provider key, applies the cache and limits, and expects
-`Authorization: Bearer <SEARCH_API_TOKEN>`.
+`Authorization: Bearer <SEARCH_API_TOKEN>`. Every request also says who's
+calling (`x-search-client: parlant`), for per-backend cost attribution.
 """
 
 import os
 
 import httpx
 from pydantic import BaseModel
+
+# The API's SEARCH_CLIENT_HEADER (packages/shared/src/search.ts).
+SEARCH_CLIENT_HEADER = "x-search-client"
 
 
 class WebSearchResult(BaseModel):
@@ -31,11 +35,10 @@ class SearchNotConfiguredError(RuntimeError):
 class SearchClient:
     def __init__(self, base_url: str, token: str | None, *, timeout: float = 10.0) -> None:
         self._token = token
-        self._http = httpx.AsyncClient(
-            base_url=base_url,
-            headers={"authorization": f"Bearer {token}"} if token else {},
-            timeout=timeout,
-        )
+        headers = {SEARCH_CLIENT_HEADER: "parlant"}
+        if token:
+            headers["authorization"] = f"Bearer {token}"
+        self._http = httpx.AsyncClient(base_url=base_url, headers=headers, timeout=timeout)
 
     @classmethod
     def from_env(cls) -> "SearchClient":

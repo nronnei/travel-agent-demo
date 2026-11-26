@@ -94,6 +94,22 @@ postgres:
 # Which agent backend serves chat: inkeep (the Inkeep run API, below), parlant
 # (the in-chart Parlant service, below) or langgraph (the in-chart LangGraph service, below). Sets CHAT_BACKEND on the API; the web app
 # reads it from /api/config and picks the matching chat engine.
+# OpenTelemetry for api, langgraph (Node preload: auto-instrumentation plus
+# @fastify/otel) and parlant (its built-in tracer and meter). Off by default:
+# with it off the Node preload loads no SDK and Parlant keeps its local tracer.
+# The homelab values turn it on with the Alloy endpoint.
+otel:
+  enabled: false
+  # OTLP/HTTP base URL, e.g. http://alloy.monitoring.svc.cluster.local:4318
+  endpoint: ''
+  # prod | dev. Also picks service.namespace (travel-agent | travel-agent-dev),
+  # which becomes Prometheus' job prefix, so dev and prod series stay apart.
+  environment: prod
+  # Lever if Tempo or CPU is stressed: parentbased_traceidratio (with
+  # OTEL_TRACES_SAMPLER_ARG in <component>.env). Undercounts LangGraph tokens.
+  tracesSampler: parentbased_always_on
+  metricExportIntervalMs: 15000
+
 chat:
   backend: inkeep
 
