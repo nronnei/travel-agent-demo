@@ -1,41 +1,58 @@
 #!/usr/bin/env bash
-# Push the Inkeep agents to the homelab Inkeep for one environment. Each
-# environment has its own Inkeep project, pointed at its own namespace's API,
-# so pushing one never repoints the other:
+# Push the Inkeep agents for one environment. Each environment has its own
+# Inkeep project, pointed at its own namespace's API:
 #
 #   dev   project travel-agent-dev → http://travel-agent-api.travel-agent-dev:3000
+#         Inkeep: the chart's own (inkeep.server.enabled), through Tilt's
+#         port-forward on localhost:3002. Tilt's inkeep-push resource runs this.
 #   prod  project travel-agent     → http://travel-agent-api.travel-agent:3000
+#         Inkeep: the homelab install until the cutover. After it, point at the
+#         chart's prod Inkeep: kubectl -n travel-agent port-forward
+#         svc/travel-agent-inkeep-api 3002, then
+#         INKEEP_API=http://localhost:3002 INKEEP_SECRET=travel-agent/travel-agent-inkeep-server
 #
-# The manage API key is read from the cluster (inkeep/inkeep-secrets), never
-# from .env, whose Inkeep settings are for the local Docker stack (`npm run
-# push` in apps/agents).
+# The manage API key comes from INKEEP_MANAGE_KEY, or from the Inkeep server's
+# Secret in the cluster, never from .env.
 #
 # The CLI runs with a throwaway HOME holding only a "homelab" profile: the
 # user's own active profile would otherwise override inkeep.config.ts, and the
 # key is only accepted as a Bearer token, which INKEEP_CI mode doesn't send.
 #
 # Usage: scripts/push-agents.sh dev|prod
-# Env:   INKEEP_API (default https://inkeep-api.honnei.house)
-#        INKEEP_UI  (default https://inkeep.honnei.house)
+# Env:   INKEEP_API, INKEEP_UI   the Inkeep API and manage UI (defaults per environment)
+#        INKEEP_SECRET            namespace/name of the Inkeep server's Secret
+#        INKEEP_MANAGE_KEY        the manage API bypass secret, instead of reading it
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 case "${1:-}" in
-  dev) NAMESPACE=travel-agent-dev PROJECT=travel-agent-dev ;;
-  prod) NAMESPACE=travel-agent PROJECT=travel-agent ;;
+  dev)
+    NAMESPACE=travel-agent-dev PROJECT=travel-agent-dev
+    DEFAULT_API=http://localhost:3002 DEFAULT_UI=http://localhost:3003
+    DEFAULT_SECRET=travel-agent-dev/travel-agent-inkeep-dev
+    ;;
+  prod)
+    NAMESPACE=travel-agent PROJECT=travel-agent
+    DEFAULT_API=https://inkeep-api.honnei.house DEFAULT_UI=https://inkeep.honnei.house
+    DEFAULT_SECRET=inkeep/inkeep-secrets
+    ;;
   *)
     echo "Usage: $0 dev|prod" >&2
     exit 1
     ;;
 esac
 
-INKEEP_API="${INKEEP_API:-https://inkeep-api.honnei.house}"
-INKEEP_UI="${INKEEP_UI:-https://inkeep.honnei.house}"
+INKEEP_API="${INKEEP_API:-${DEFAULT_API}}"
+INKEEP_UI="${INKEEP_UI:-${DEFAULT_UI}}"
+INKEEP_SECRET="${INKEEP_SECRET:-${DEFAULT_SECRET}}"
 
-KEY="$(kubectl -n inkeep get secret inkeep-secrets \
-  -o jsonpath='{.data.INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET}' | base64 -d)"
+KEY="${INKEEP_MANAGE_KEY:-}"
 if [[ -z "${KEY}" ]]; then
-  echo "inkeep/inkeep-secrets has no INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET." >&2
+  KEY="$(kubectl -n "${INKEEP_SECRET%%/*}" get secret "${INKEEP_SECRET#*/}" \
+    -o jsonpath='{.data.INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET}' | base64 -d)"
+fi
+if [[ -z "${KEY}" ]]; then
+  echo "${INKEEP_SECRET} has no INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET." >&2
   exit 1
 fi
 

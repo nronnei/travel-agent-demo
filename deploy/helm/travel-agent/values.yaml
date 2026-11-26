@@ -116,7 +116,111 @@ inkeep:
   # kubectl -n travel-agent create secret generic travel-agent-inkeep \
   #   --from-literal=INKEEP_AGENTS_RUN_API_BYPASS_SECRET=... --from-literal=INTAKE_API_TOKEN=... \
   #   --from-literal=TAVILY_API_KEY=... --from-literal=SEARCH_API_TOKEN=...
+  # This is the API's Secret, not the Inkeep server's (that's inkeep.server.secret). With
+  # inkeep.server.enabled the bypass secret comes from the server's Secret instead.
   existingSecret: ''
+
+  # Inkeep itself, deployed by this chart: agents-api (plus its migrations), the manage UI,
+  # SpiceDB and Doltgres (the manage DB). The run DB and SpiceDB's datastore are databases
+  # "inkeep" and "spicedb" on the release's CloudNativePG cluster (needs postgres.enabled).
+  # When enabled, the API talks to it in-cluster and apiUrl is ignored.
+  server:
+    enabled: false
+    # Secret (made outside the chart: Tilt in dev, scripts/inkeep-secrets.sh prod) with
+    #   ANTHROPIC_API_KEY, SEARCH_API_TOKEN, INTAKE_API_TOKEN (the same values as the API's),
+    #   INKEEP_AGENTS_MANAGE_UI_USERNAME / _PASSWORD, INKEEP_AGENTS_RUN_API_BYPASS_SECRET,
+    #   INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET, INKEEP_AGENTS_JWT_SIGNING_SECRET,
+    #   BETTER_AUTH_SECRET, INKEEP_ANON_JWT_SECRET,
+    #   INKEEP_AGENTS_TEMP_JWT_PRIVATE_KEY / _PUBLIC_KEY, SPICEDB_PRESHARED_KEY, DOLTGRES_PASSWORD.
+    # The database roles' passwords are basic-auth Secrets <release>-db-inkeep and
+    # <release>-db-spicedb, like the other backends'.
+    secret: ''
+    # Keep the "inkeep" and "spicedb" database roles even while Inkeep is off (dev:
+    # Tilt turns it off when another backend is selected, and its data should stay).
+    keepDatabases: false
+    # Matches the @inkeep/* packages in apps/agents.
+    version: 0.80.4
+    api:
+      replicas: 1
+      image:
+        repository: inkeep/agents-api
+        tag: '' # defaults to inkeep.server.version
+        pullPolicy: IfNotPresent
+      migrateImage:
+        repository: inkeep/agents-migrate
+        tag: ''
+      containerPort: 3002
+      healthPath: /health
+      service:
+        port: 3002
+      # How a browser reaches the API and the manage UI (Tilt sets port-forward URLs).
+      publicUrl: http://localhost:3002
+      manageUiUrl: http://localhost:3003
+      env: {}
+      # Uploaded files. Without a PVC they reset when the pod restarts.
+      blobStorage:
+        persistence:
+          enabled: false
+          size: 1Gi
+          storageClassName: ''
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      resources:
+        requests:
+          cpu: 100m
+          memory: 384Mi
+        limits:
+          memory: 2Gi
+    ui:
+      enabled: true
+      replicas: 1
+      image:
+        repository: inkeep/agents-manage-ui
+        tag: ''
+        pullPolicy: IfNotPresent
+      containerPort: 3000
+      service:
+        port: 3000
+      env: {}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: [ALL]
+        seccompProfile:
+          type: RuntimeDefault
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 1Gi
+    spicedb:
+      image:
+        repository: authzed/spicedb
+        tag: v1.49.2
+      resources:
+        requests:
+          cpu: 50m
+          memory: 128Mi
+        limits:
+          memory: 512Mi
+    doltgres:
+      image:
+        repository: dolthub/doltgresql
+        tag: 0.56.7
+      storage:
+        size: 10Gi
+        storageClassName: ''
+      resources:
+        requests:
+          cpu: 50m
+          memory: 256Mi
+        limits:
+          memory: 2Gi
 
 ingress:
   enabled: true

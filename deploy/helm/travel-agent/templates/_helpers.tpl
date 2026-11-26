@@ -41,8 +41,11 @@ Expects (dict "root" $ "component" "api" "values" .Values.api "env" (dict ...)),
 plus an optional "envFromSecret" naming a Secret whose keys all become env vars,
 optional "volumes" / "volumeMounts" lists, an optional "secretEnv" list of
 (dict "name" "ENV_VAR" "secret" "secret-name" "key" "key"), and an optional "strategy" (the
-Deployment's rollout strategy, e.g. Recreate for a ReadWriteOnce volume).
+Deployment's rollout strategy, e.g. Recreate for a ReadWriteOnce volume), and an optional
+"initContainers" list (rendered as given).
 .values.podSecurityContext, if set, becomes the pod's securityContext.
+.values.probe, if set, replaces the httpGet on .values.healthPath in all three probes
+(e.g. tcpSocket: {port: http}).
 Entries in .values.env override the computed "env".
 */}}
 {{- define "travel-agent.deployment" -}}
@@ -91,6 +94,10 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .initContainers }}
+      initContainers:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .component }}
           image: "{{ $v.image.repository }}:{{ $v.image.tag | default $root.Chart.AppVersion }}"
@@ -123,21 +130,16 @@ spec:
             {{- end }}
           {{- end }}
           # Generous startup window: dev images compile before serving.
+          {{- $probe := $v.probe | default (dict "httpGet" (dict "path" $v.healthPath "port" "http")) }}
           startupProbe:
-            httpGet:
-              path: {{ $v.healthPath }}
-              port: http
+            {{- toYaml $probe | nindent 12 }}
             periodSeconds: 5
             failureThreshold: 60
           readinessProbe:
-            httpGet:
-              path: {{ $v.healthPath }}
-              port: http
+            {{- toYaml $probe | nindent 12 }}
             periodSeconds: 10
           livenessProbe:
-            httpGet:
-              path: {{ $v.healthPath }}
-              port: http
+            {{- toYaml $probe | nindent 12 }}
             periodSeconds: 20
           {{- with $v.resources }}
           resources:
@@ -180,8 +182,11 @@ spec:
 {{/*
 Connection settings for a backend's own database in the cluster: its role's password
 from the basic-auth Secret, a URL built from it, and the cluster CA for verifying the
-server. Expects (dict "root" $ "component" "langgraph" "prefix" "LANGGRAPH_"); returns
-YAML with "secretEnv", "env", "volume" and "mount", for fromYaml.
+server. Expects (dict "root" $ "component" "langgraph" "prefix" "LANGGRAPH_"), plus an
+optional "urlName" (the URL's env var; default <prefix>DATABASE_URL) and "query" (appended
+to the URL, e.g. "sslmode=verify-full&sslrootcert=/etc/postgres-ca/ca.crt" for clients
+that don't read <prefix>DATABASE_SSL_ROOT_CERT); returns YAML with "secretEnv", "env",
+"volume" and "mount", for fromYaml.
 The API instead reads the operator's <cluster>-app Secret (templates/api.yaml).
 */}}
 {{- define "travel-agent.postgresConnection" -}}
@@ -192,7 +197,7 @@ secretEnv:
     secret: {{ printf "%s-%s" $cluster .component }}
     key: password
 env:
-  {{ .prefix }}DATABASE_URL: {{ printf "postgresql://%s:$(%s)@%s-rw:5432/%s" .component $password $cluster .component | quote }}
+  {{ .urlName | default (printf "%sDATABASE_URL" .prefix) }}: {{ printf "postgresql://%s:$(%s)@%s-rw:5432/%s%s" .component $password $cluster .component (ternary (printf "?%s" .query) "" (not (empty .query))) | quote }}
   {{ .prefix }}DATABASE_SSL_ROOT_CERT: /etc/postgres-ca/ca.crt
 {{ include "travel-agent.postgresCaMounts" .root }}
 {{- end }}
