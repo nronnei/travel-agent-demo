@@ -14,7 +14,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
-    "test:e2e": "vitest run --config ./vitest.config.e2e.ts"
+    "test:e2e": "vitest run --config ./vitest.config.e2e.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.2",
@@ -24,16 +26,21 @@
     "@nestjs/platform-fastify": "^12.3.2",
     "@nestjs/terminus": "^12.1.0",
     "@travel-agent/shared": "*",
+    "drizzle-orm": "^0.45.4",
+    "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "zod": "~4.5.4"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.3.16",
     "@nestjs/cli": "^12.0.11",
     "@nestjs/schematics": "^12.0.0",
     "@nestjs/testing": "^12.3.2",
     "@types/node": "^26.6.6",
+    "@types/pg": "~8.15.6",
     "@vitest/coverage-v8": "^4.1.2",
+    "drizzle-kit": "^0.31.11",
     "oxlint-tsgolint": "^7.0.2001",
     "source-map-support": "^0.5.21",
     "vite": "^8.3.5",

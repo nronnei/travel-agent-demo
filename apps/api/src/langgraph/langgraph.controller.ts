@@ -41,7 +41,7 @@ export class LangGraphController {
     @Res() reply: FastifyReply,
   ) {
     const conversationId = parse(ConversationIdSchema, id);
-    const record = this.intake.authorize(conversationId, key);
+    const record = await this.intake.authorize(conversationId, key);
     const request = parse(LangGraphStreamRequestSchema, body);
     const upstream: LangGraphRunRequest =
       'command' in request

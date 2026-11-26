@@ -28,12 +28,12 @@ const trip = {
 };
 
 describe('IntakeController', () => {
-  it('serves the stored identity and confirmed trip to the context fetcher', () => {
+  it('serves the stored identity and confirmed trip to the context fetcher', async () => {
     const c = controller();
-    const { conversationKey } = c.setIdentity('chat1', identity);
-    c.confirmTrip('chat1', trip, conversationKey);
+    const { conversationKey } = await c.setIdentity('chat1', identity);
+    await c.confirmTrip('chat1', trip, conversationKey);
 
-    expect(c.context('chat1', 'tok')).toEqual({
+    expect(await c.context('chat1', 'tok')).toEqual({
       address: 'Dr García Márquez',
       givenName: 'Gabriel',
       surname: 'García Márquez',
@@ -45,109 +45,109 @@ describe('IntakeController', () => {
     });
   });
 
-  it('addresses guests by full name without a title or surname', () => {
+  it('addresses guests by full name without a title or surname', async () => {
     const c = controller();
-    c.setIdentity('a', { ...identity, prefix: 'none' });
-    c.setIdentity('b', { givenName: 'Madonna', prefix: 'Ms' });
-    expect(c.context('a', 'tok').address).toBe('Gabriel García Márquez');
-    expect(c.context('b', 'tok').address).toBe('Madonna');
+    await c.setIdentity('a', { ...identity, prefix: 'none' });
+    await c.setIdentity('b', { givenName: 'Madonna', prefix: 'Ms' });
+    expect((await c.context('a', 'tok')).address).toBe('Gabriel García Márquez');
+    expect((await c.context('b', 'tok')).address).toBe('Madonna');
   });
 
-  it('lets only the browser that claimed a conversation write to it', () => {
+  it('lets only the browser that claimed a conversation write to it', async () => {
     const c = controller();
-    const { conversationKey } = c.setIdentity('chat1', identity);
+    const { conversationKey } = await c.setIdentity('chat1', identity);
     expect(conversationKey).toMatch(/^[\w-]{43}$/);
 
     // Someone else can't overwrite the identity or brief, with or without a key.
-    expect(() => c.setIdentity('chat1', identity)).toThrow(ForbiddenException);
-    expect(() => c.confirmTrip('chat1', trip, 'guess')).toThrow(
+    await expect(c.setIdentity('chat1', identity)).rejects.toThrow(ForbiddenException);
+    await expect(c.confirmTrip('chat1', trip, 'guess')).rejects.toThrow(
       ForbiddenException,
     );
-    expect(() => c.confirmTrip('nobody', trip, conversationKey)).toThrow(
+    await expect(c.confirmTrip('nobody', trip, conversationKey)).rejects.toThrow(
       NotFoundException,
     );
 
     // The owner can update their identity; no new key is issued.
     expect(
-      c.setIdentity('chat1', { ...identity, prefix: 'Mx' }, conversationKey),
+      await c.setIdentity('chat1', { ...identity, prefix: 'Mx' }, conversationKey),
     ).toEqual({});
-    expect(c.context('chat1', 'tok').address).toBe('Mx García Márquez');
+    expect((await c.context('chat1', 'tok')).address).toBe('Mx García Márquez');
   });
 
-  it('returns empty context for an unknown conversation', () => {
-    expect(controller().context('nobody', 'tok')).toMatchObject({
+  it('returns empty context for an unknown conversation', async () => {
+    expect(await controller().context('nobody', 'tok')).toMatchObject({
       address: '',
       briefConfirmed: 'no',
     });
   });
 
-  it('rejects a wrong or missing token, and is unavailable when unconfigured', () => {
-    expect(() => controller().context('chat1', 'nope')).toThrow(
+  it('rejects a wrong or missing token, and is unavailable when unconfigured', async () => {
+    await expect(controller().context('chat1', 'nope')).rejects.toThrow(
       UnauthorizedException,
     );
-    expect(() => controller().context('chat1', undefined)).toThrow(
+    await expect(controller().context('chat1', undefined)).rejects.toThrow(
       UnauthorizedException,
     );
-    expect(() => controller(null).context('chat1', 'tok')).toThrow(
+    await expect(controller(null).context('chat1', 'tok')).rejects.toThrow(
       ServiceUnavailableException,
     );
   });
 
-  it('validates bodies and conversation ids', () => {
+  it('validates bodies and conversation ids', async () => {
     const c = controller();
-    expect(() =>
+    await expect(
       c.setIdentity('chat1', { givenName: '', prefix: 'Dr' }),
-    ).toThrow(BadRequestException);
-    expect(() =>
+    ).rejects.toThrow(BadRequestException);
+    await expect(
       c.setIdentity('chat1', { ...identity, prefix: 'Sir' }),
-    ).toThrow(BadRequestException);
-    expect(() =>
+    ).rejects.toThrow(BadRequestException);
+    await expect(
       c.confirmTrip('chat1', { ...trip, destination: '<UNKNOWN>' }, 'k'),
-    ).toThrow(BadRequestException);
-    expect(() => c.setIdentity('../etc', identity)).toThrow(
+    ).rejects.toThrow(BadRequestException);
+    await expect(c.setIdentity('../etc', identity)).rejects.toThrow(
       BadRequestException,
     );
   });
 
-  it('serves a draft brief until the trip is confirmed', () => {
+  it('serves a draft brief until the trip is confirmed', async () => {
     const c = controller();
-    const { conversationKey } = c.setIdentity('chat1', identity);
+    const { conversationKey } = await c.setIdentity('chat1', identity);
 
     // The Parlant agent's tool writes with the intake token.
-    c.saveDraft('chat1', trip, undefined, 'tok');
-    expect(c.context('chat1', 'tok')).toMatchObject({
+    await c.saveDraft('chat1', trip, undefined, 'tok');
+    expect(await c.context('chat1', 'tok')).toMatchObject({
       destination: 'New England',
       interests: 'Fall foliage, Food & drink',
       briefConfirmed: 'no',
     });
 
     // The guest's own edit, with their conversation key.
-    c.saveDraft('chat1', { ...trip, destination: 'Vermont' }, conversationKey);
-    expect(c.context('chat1', 'tok').destination).toBe('Vermont');
+    await c.saveDraft('chat1', { ...trip, destination: 'Vermont' }, conversationKey);
+    expect((await c.context('chat1', 'tok')).destination).toBe('Vermont');
 
     // Confirming wins over any later draft.
-    c.confirmTrip('chat1', trip, conversationKey);
-    c.saveDraft('chat1', { ...trip, destination: 'Maine' }, conversationKey);
-    expect(c.context('chat1', 'tok')).toMatchObject({
+    await c.confirmTrip('chat1', trip, conversationKey);
+    await c.saveDraft('chat1', { ...trip, destination: 'Maine' }, conversationKey);
+    expect(await c.context('chat1', 'tok')).toMatchObject({
       destination: 'New England',
       briefConfirmed: 'yes',
     });
   });
 
-  it('guards draft writes by conversation key or intake token', () => {
+  it('guards draft writes by conversation key or intake token', async () => {
     const c = controller();
-    c.setIdentity('chat1', identity);
-    expect(() => c.saveDraft('chat1', trip, 'guess')).toThrow(
+    await c.setIdentity('chat1', identity);
+    await expect(c.saveDraft('chat1', trip, 'guess')).rejects.toThrow(
       ForbiddenException,
     );
-    expect(() => c.saveDraft('chat1', trip, undefined, 'nope')).toThrow(
+    await expect(c.saveDraft('chat1', trip, undefined, 'nope')).rejects.toThrow(
       UnauthorizedException,
     );
-    expect(() => c.saveDraft('nobody', trip, undefined, 'tok')).toThrow(
+    await expect(c.saveDraft('nobody', trip, undefined, 'tok')).rejects.toThrow(
       NotFoundException,
     );
-    expect(() =>
+    await expect(
       c.saveDraft('chat1', { ...trip, purpose: 'tbd' }, undefined, 'tok'),
-    ).toThrow(BadRequestException);
+    ).rejects.toThrow(BadRequestException);
   });
 });

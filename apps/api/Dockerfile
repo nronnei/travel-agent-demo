@@ -37,6 +37,8 @@ COPY --from=prune /repo/out/json/ .
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 COPY --from=build /repo/packages/shared/dist packages/shared/dist
 COPY --from=build /repo/apps/api/dist apps/api/dist
+# SQL migrations, applied at startup (src/database/migrate.ts).
+COPY --from=build /repo/apps/api/drizzle apps/api/drizzle
 USER node
 WORKDIR /repo/apps/api
 EXPOSE 3000

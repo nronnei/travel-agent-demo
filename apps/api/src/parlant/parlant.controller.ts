@@ -103,12 +103,12 @@ export class ParlantController {
   ): Promise<T> {
     const conversationId = parse(ConversationIdSchema, id);
     // Only the browser that claimed this conversation may talk in it.
-    this.intake.authorize(conversationId, key);
-    const session = await this.parlant.sessionFor(conversationId);
+    const record = await this.intake.authorize(conversationId, key);
+    const session = await this.parlant.sessionFor(conversationId, record);
     try {
       return await use(session);
     } catch (err) {
-      if (err instanceof GoneException) this.parlant.forget(conversationId);
+      if (err instanceof GoneException) await this.parlant.forget(conversationId);
       throw err;
     }
   }

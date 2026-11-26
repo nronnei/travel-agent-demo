@@ -18,7 +18,16 @@
 {{- end -}}
 {{- $volumes := list $data (dict "name" "tmp" "emptyDir" (dict)) -}}
 {{- $mounts := list (dict "name" "langgraph-data" "mountPath" $dataDir) (dict "name" "tmp" "mountPath" "/tmp") -}}
-{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.langgraph.existingSecret "volumes" $volumes "volumeMounts" $mounts) $ctx) }}
+{{- $secretEnv := list -}}
+{{- if .Values.langgraph.postgres.enabled -}}
+{{- $db := fromYaml (include "travel-agent.postgresConnection" (dict "root" . "component" "langgraph" "prefix" "LANGGRAPH_")) -}}
+{{- $env = merge $env $db.env -}}
+{{- $_ := set $env "LANGGRAPH_CHECKPOINTER" "postgres" -}}
+{{- $secretEnv = $db.secretEnv -}}
+{{- $volumes = append $volumes $db.volume -}}
+{{- $mounts = append $mounts $db.mount -}}
+{{- end -}}
+{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.langgraph.existingSecret "volumes" $volumes "volumeMounts" $mounts "secretEnv" $secretEnv) $ctx) }}
 ---
 {{ include "travel-agent.service" $ctx }}
 {{- end }}

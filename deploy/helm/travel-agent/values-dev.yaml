@@ -24,21 +24,25 @@ web:
 inkeep:
   projectId: travel-agent-dev
 
+# The dev namespace's own Postgres cluster (travel-agent-db). Longhorn like the
+# other dev volumes; the homelab values pick longhorn-workers for prod.
+postgres:
+  enabled: true
+  storageClass: longhorn
+
 # Runs alongside Inkeep in dev; `tilt up -- --chat-backend=parlant` points the API at it.
 parlant:
   enabled: true
   securityContext: null
-  # Keeps sessions across pod restarts (Tilt replaces the pod on config changes);
-  # with an emptyDir the API's cached session ids would point at nothing.
-  persistence:
+  # Sessions and customers in the dev cluster's "parlant" database, so they
+  # survive pod restarts; PARLANT_HOME (embedding cache, logs) is an emptyDir.
+  postgres:
     enabled: true
-    storageClassName: longhorn
 
 # Runs alongside the others in dev; `tilt up -- --chat-backend=langgraph` points the API at it.
 langgraph:
   enabled: true
   securityContext: null
-  # Keeps conversation checkpoints across pod restarts.
-  persistence:
+  # Checkpoints in the dev cluster's "langgraph" database.
+  postgres:
     enabled: true
-    storageClassName: longhorn

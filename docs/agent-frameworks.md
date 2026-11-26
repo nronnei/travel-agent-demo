@@ -71,6 +71,7 @@ backend has its own chat engine (`apps/web/src/chat/`) behind the same
 | Fixed lines            | Prompt wording                                                                                                                                                                           | Canned responses. In 4.0.5 these are style references, not enforced. See the findings below.                                                                                                                                                                  | Prompt wording (one fixed fallback line is code)                                                                                                                                                                                                                                                                                                |
 | Models                 | Haiku 5.5 for intake (data components need forced tool choice, which Sonnet 5.5 rejects) and Sonnet 5.5 for planning                                                                     | `Effort.HIGH`: Sonnet 5.5 for replies, Haiku 5.5 for rule matching and review                                                                                                                                                                                 | Sonnet 5.5 for both. Widgets are ordinary tool calls with `tool_choice: auto`, so Sonnet works for intake. Thinking set to `between_tools` (Sonnet 5.5 rejects `disabled`)                                                                                                                                                                      |
 | Web search             | An `mcpTool` on the planner, calling the API's MCP server (`POST /api/mcp`) with a Bearer token from Inkeep's memory credential store. The model sees the MCP server's tool description. | A `web_search` tool on the `trip-planning` policy, calling `POST /api/search/web` over REST (Parlant's MCP client can't send auth headers). It emits a `custom` event as it starts, so the app can show "Searching the web…" before the `tool` event arrives. | A `web_search` tool (LangChain `tool()`, run by a `ToolNode`) calling `POST /api/search/web` over REST. Sources ride in the ToolMessage `artifact`, which the model never sees. At most three searches per reply, enforced in code                                                                                                              |
+| Storage                | Two Postgres-wire databases of its own: Doltgres (the manage DB, git-style versioned configs; not Postgres, so it can't run on CNPG) and Postgres (the run DB: conversations, auth), plus SpiceDB's Postgres. The homelab install's run and SpiceDB databases are on CNPG (`inkeep-db`). | Sessions and customers through a `DocumentDatabase`. 4.0.5 ships SQLite, MongoDB, S3 and Snowflake adapters, but no Postgres one: we wrote `travel_agent/postgres_db.py` (about 450 lines, asyncpg), and its own stores run on it unchanged. | An official Postgres checkpointer (`@langchain/langgraph-checkpoint-postgres`); `setup()` creates its tables. |
 
 ### Prompts: LangGraph against Inkeep
 
@@ -106,6 +107,45 @@ where the live runs showed a problem.
 - **Embeddings:** with Anthropic you need a Voyage key. Without one, Parlant fails during indexing, not at startup.
 - **Web search** uses one implementation in the Nest API (Tavily, with a cache and best-effort limits), so both agents get the same results. Run-through findings (searches per turn, latency, whether Inkeep's stream exposes MCP tool calls for the live indicator) are still to be recorded.
 - **Latency:** in local runs with a stand-in embedder, intake turns took 3–7 s and planning turns about 8 s. Each turn makes several model calls: rule matching, tool evaluation, then the reply. Measured on the cluster, see the eval log below.
+
+### Storage on Postgres (CloudNativePG)
+
+Logged 2026-11-22, moving every backend onto one CNPG cluster per environment,
+with a database and role per service (docs/plans/2026-11-22-cnpg-postgres.md).
+
+- **LangGraph** was the easiest: swap `SqliteSaver` for `PostgresSaver` over a
+  `pg.Pool` and call `setup()` once at startup. Nothing else changed.
+- **Parlant** has no Postgres option, but its persistence is pluggable at two
+  levels:
+  - **`DocumentDatabase`** (about 10 methods): a generic document store that
+    Parlant's own `SessionDocumentStore` and `CustomerDocumentStore` (and their
+    schema migrations) sit on. This is what we implemented. Pass the entered
+    stores to `p.Server(session_store=..., customer_store=...)`.
+  - **`SessionStore` / `CustomerStore`** (19 + 9 methods), tied to Parlant's domain
+    model. More work, and more likely to break on upgrades. A custom
+    `CustomerStore` is also the hook for keeping guest PII out of Parlant's
+    storage (see "Guest data and the model").
+  - The ABCs live in `parlant.core.persistence`, not the SDK, so a minor release
+    could change them. Our contract tests run against Parlant's own SQLite
+    adapter as the reference, and should be re-run on every upgrade.
+  - The SQLite reference loads a whole collection and filters in Python on every
+    query, which grows with total history (all sessions' events share one
+    collection). Our adapter pushes scalar `$eq` on `id` and `session_id` down to
+    a GIN-indexed JSONB `@>`, after checking that those are the hot filters and
+    that no document loader rewrites them.
+  - Parlant's `migrate` defaults to `False`, which `local` stores inherit: a store
+    whose schema changed fails with `MigrationRequired` instead of rewriting
+    documents. We keep that default for the Postgres stores.
+  - The transient adapter isn't a faithful reference: it keeps duplicate ids on
+    insert and skips document loaders.
+- **Inkeep** needs the most infrastructure: Doltgres can't move, and its run DB
+  connection role is no longer a superuser after the move, so the cutover was
+  rehearsed against a throwaway cluster first (plan step 11). Inkeep's migrations
+  were fine as a non-superuser. **SpiceDB wasn't, at first:** its Postgres datastore
+  decides visibility by transaction ID, so after a `pg_dump`/`pg_restore` onto a new
+  server the restored relationships were invisible (their IDs were ahead of the new
+  server's counter) until `spicedb datastore repair transaction-ids` ran. Anything
+  that moves a SpiceDB Postgres datastore needs that step, and nothing errors without it.
 
 ### LangGraph.js 1.7.5
 

@@ -66,6 +66,31 @@ web:
     limits:
       memory: 128Mi
 
+# The environment's Postgres: one CloudNativePG cluster, <release>-db (needs the CNPG
+# operator). The API owns its "api" database and connects with the operator's
+# <release>-db-app Secret; each agent backend with <component>.postgres.enabled gets
+# its own role and database. Connections are TLS, verified against <release>-db-ca.
+# Status: kubectl cnpg status travel-agent-db (or kubectl get cluster).
+postgres:
+  enabled: false
+  instances: 1
+  imageName: ghcr.io/cloudnative-pg/postgresql:18
+  storageClass: ''
+  size: 5Gi
+  resources:
+    requests:
+      cpu: 25m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+  # A PodMonitor for the CNPG dashboard (needs the monitoring.coreos.com CRDs).
+  podMonitor:
+    enabled: false
+  isolation:
+    # Ends pg_hba with "host all all all reject": each role reaches only its own
+    # database. Turn off only if it ever locks out the operator.
+    rejectOthers: true
+
 # Which agent backend serves chat: inkeep (the Inkeep run API, below), parlant
 # (the in-chart Parlant service, below) or langgraph (the in-chart LangGraph service, below). Sets CHAT_BACKEND on the API; the web app
 # reads it from /api/config and picks the matching chat engine.
@@ -131,8 +156,19 @@ parlant:
   #   --from-literal=ANTHROPIC_API_KEY=... --from-literal=VOYAGE_API_KEY=... \
   #   --from-literal=INTAKE_API_TOKEN=... --from-literal=SEARCH_API_TOKEN=...
   existingSecret: ''
-  # Sessions and customers live in SQLite under PARLANT_HOME. Without a PVC they
-  # reset whenever the pod restarts.
+  # Sessions and customers in the cluster's "parlant" database (needs postgres.enabled).
+  # The role's password is a basic-auth Secret <release>-db-parlant, made outside the
+  # chart (Tilt makes it from .env in dev):
+  #   kubectl -n travel-agent create secret generic travel-agent-db-parlant \
+  #     --type=kubernetes.io/basic-auth --from-literal=username=parlant \
+  #     --from-literal=password=$(openssl rand -hex 32)
+  # Don't turn this on in prod before sessions have a retention prune: they hold
+  # whole guest conversations, with no expiry.
+  postgres:
+    enabled: false
+  # Without postgres: sessions and customers live in SQLite under PARLANT_HOME, and
+  # without a PVC they reset whenever the pod restarts. With postgres, PARLANT_HOME
+  # only holds an embedding cache and logs, so the PVC isn't needed.
   persistence:
     enabled: false
     size: 1Gi
@@ -182,9 +218,19 @@ langgraph:
   #   --from-literal=ANTHROPIC_API_KEY=... --from-literal=INTAKE_API_TOKEN=... \
   #   --from-literal=SEARCH_API_TOKEN=... --from-literal=LANGGRAPH_API_TOKEN=...
   existingSecret: ''
-  # Conversation checkpoints live in SQLite under /var/lib/langgraph, with no expiry
-  # (they hold the guest's details: add a TTL prune before any prod use). Without a
-  # PVC they reset whenever the pod restarts.
+  # Checkpoints in the cluster's "langgraph" database (needs postgres.enabled). The
+  # role's password is a basic-auth Secret <release>-db-langgraph, made outside the
+  # chart (Tilt makes it from .env in dev):
+  #   kubectl -n travel-agent create secret generic travel-agent-db-langgraph \
+  #     --type=kubernetes.io/basic-auth --from-literal=username=langgraph \
+  #     --from-literal=password=$(openssl rand -hex 32)
+  # Don't turn this on in prod before checkpoints have a retention prune: they hold
+  # whole guest conversations, with no expiry.
+  postgres:
+    enabled: false
+  # Without postgres: checkpoints live in SQLite under /var/lib/langgraph, with no
+  # expiry (they hold the guest's details: add a TTL prune before any prod use), and
+  # without a PVC they reset whenever the pod restarts.
   persistence:
     enabled: false
     size: 1Gi

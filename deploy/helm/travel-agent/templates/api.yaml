@@ -22,6 +22,16 @@
 {{- if .Values.langgraph.enabled -}}
 {{- $_ := set $env "LANGGRAPH_API_URL" (printf "http://%s:%v" (include "travel-agent.componentName" (dict "root" . "component" "langgraph")) .Values.langgraph.service.port) -}}
 {{- end -}}
-{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.inkeep.existingSecret) $ctx) }}
+{{- $extra := dict -}}
+{{- if .Values.postgres.enabled -}}
+{{- /* The API owns the cluster's bootstrap database; the operator writes its credentials. */ -}}
+{{- $cluster := include "travel-agent.postgresClusterName" . -}}
+{{- $ca := fromYaml (include "travel-agent.postgresCaMounts" .) -}}
+{{- $_ := set $env "DATABASE_SSL_ROOT_CERT" "/etc/postgres-ca/ca.crt" -}}
+{{- $_ := set $extra "secretEnv" (list (dict "name" "DATABASE_URL" "secret" (printf "%s-app" $cluster) "key" "uri")) -}}
+{{- $_ := set $extra "volumes" (list $ca.volume) -}}
+{{- $_ := set $extra "volumeMounts" (list $ca.mount) -}}
+{{- end -}}
+{{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.inkeep.existingSecret) $extra $ctx) }}
 ---
 {{ include "travel-agent.service" $ctx }}

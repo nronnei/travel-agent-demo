@@ -9,16 +9,16 @@ import type { ParlantClient } from './parlant.client.js';
 import { ParlantController } from './parlant.controller.js';
 import type { ParlantService } from './parlant.service.js';
 
-function setup() {
+async function setup() {
   const intake = new IntakeService();
-  const { conversationKey } = intake.setIdentity(
+  const { conversationKey } = await intake.setIdentity(
     'chat1',
     { givenName: 'Ana', surname: '', prefix: 'Dr' },
     undefined,
   );
   const parlant = {
     sessionFor: vi.fn(async () => 'sess1'),
-    forget: vi.fn(),
+    forget: vi.fn(async () => {}),
   };
   const client = {
     postMessage: vi.fn(async () => ({ offset: 4 })),
@@ -34,7 +34,7 @@ function setup() {
 
 describe('ParlantController', () => {
   it("posts the guest's message to the conversation's session", async () => {
-    const { controller, client, key } = setup();
+    const { controller, client, key } = await setup();
     expect(
       await controller.message('chat1', key, { text: ' Lisbon ' }),
     ).toEqual({
@@ -46,7 +46,7 @@ describe('ParlantController', () => {
   });
 
   it('forgets a session Parlant no longer has', async () => {
-    const { controller, client, parlant, key } = setup();
+    const { controller, client, parlant, key } = await setup();
     client.postMessage.mockRejectedValueOnce(new GoneException('gone'));
     await expect(
       controller.message('chat1', key, { text: 'hi' }),
@@ -55,7 +55,7 @@ describe('ParlantController', () => {
   });
 
   it('lets only the browser that claimed the conversation talk in it', async () => {
-    const { controller, client } = setup();
+    const { controller, client } = await setup();
     await expect(
       controller.message('chat1', 'guess', { text: 'hi' }),
     ).rejects.toBeInstanceOf(ForbiddenException);
@@ -66,7 +66,7 @@ describe('ParlantController', () => {
   });
 
   it('validates messages, ids and offsets', async () => {
-    const { controller, key } = setup();
+    const { controller, key } = await setup();
     for (const body of [{}, { text: '' }, { text: 'x'.repeat(4001) }]) {
       await expect(
         controller.message('chat1', key, body),

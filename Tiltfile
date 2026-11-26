@@ -53,6 +53,8 @@ PARLANT_IMAGE = cluster.get('parlant', {}).get('image', {}).get('repository') or
 LANGGRAPH_IMAGE = cluster.get('langgraph', {}).get('image', {}).get('repository') or \
     cluster['api']['image']['repository'].replace('travel-agent-api', 'travel-agent-langgraph')
 HOST = read_yaml(HOMELAB_DEV_VALUES)['ingress']['host']
+# Whether the homelab values turn on the Postgres PodMonitor (dev inherits it).
+PODMONITOR = cluster.get('postgres', {}).get('podMonitor', {}).get('enabled', False)
 
 namespace_create(NAMESPACE)
 
@@ -96,6 +98,24 @@ def dev_secret(name, keys, extra={}):
     }))
     return name
 
+def basic_auth_secret(name, username, key):
+    """A kubernetes.io/basic-auth Secret for a CNPG DatabaseRole, its password from .env;
+    returns its name, or ''. Applied with kubectl rather than k8s_yaml: Tilt scrubs the
+    values of Secrets it deploys from every log, and the usernames ("langgraph",
+    "parlant") are everyday words there. Like the cluster, it outlives `tilt down`."""
+    password = DOTENV.get(key)
+    if not password:
+        warn('.env is missing %s: the %s database role has no password, so %s can\'t connect' % (key, username, username))
+        return ''
+    local('kubectl -n %s apply -f -' % NAMESPACE, quiet=True, echo_off=True, stdin=encode_yaml({
+        'apiVersion': 'v1',
+        'kind': 'Secret',
+        'metadata': {'name': name, 'namespace': NAMESPACE},
+        'type': 'kubernetes.io/basic-auth',
+        'stringData': {'username': username, 'password': password},
+    }))
+    return name
+
 helm_set = [
     'chat.backend=' + CHAT_BACKEND,
     'parlant.enabled=' + str(PARLANT).lower(),
@@ -133,6 +153,11 @@ langgraph_secret = LANGGRAPH and dev_secret('travel-agent-langgraph-dev',
                                              'SEARCH_API_TOKEN', 'LANGGRAPH_API_TOKEN'])
 if langgraph_secret:
     helm_set.append('langgraph.existingSecret=' + langgraph_secret)
+# Passwords for the backends' roles in the dev Postgres cluster (values-dev.yaml
+# turns both on, whichever backend is selected). Existing .env files predate these
+# keys: add them by hand (openssl rand -hex 32).
+basic_auth_secret('travel-agent-db-langgraph', 'langgraph', 'LANGGRAPH_DB_PASSWORD')
+basic_auth_secret('travel-agent-db-parlant', 'parlant', 'PARLANT_DB_PASSWORD')
 
 k8s_yaml(helm(
     CHART,
@@ -154,6 +179,8 @@ docker_build(
         fall_back_on(DEP_FILES + ['apps/api/package.json', 'apps/api/tsconfig.json']),
         sync('packages/shared/src', '/repo/packages/shared/src'),
         sync('apps/api/src', '/repo/apps/api/src'),
+        # New migrations from `npm run db:generate`, applied when the API restarts.
+        sync('apps/api/drizzle', '/repo/apps/api/drizzle'),
     ],
 )
 
@@ -217,21 +244,25 @@ k8s_resource('travel-agent-api', labels=['app'],
              links=[link('https://%s/api/health' % HOST, 'health')])
 k8s_resource('travel-agent-web', labels=['app'],
              links=[link('https://%s' % HOST, 'app')])
-# The volumes of agents that aren't selected stay, under infra.
+# Each backend's database objects in the shared cluster (its role and database).
+def db_objects(component):
+    name = 'travel-agent-db-' + component
+    return [name + ':databaserole', name + ':database']
+
+# The volumes and databases of agents that aren't selected stay, under infra.
 idle_volumes = []
 if PARLANT:
     # Port-forwarded so Parlant's REST API and /docs are reachable at localhost:8800.
     k8s_resource('travel-agent-parlant', labels=['app'], port_forwards=8800,
-                 objects=owned('travel-agent-parlant:persistentvolumeclaim',
-                               parlant_secret and parlant_secret + ':secret'))
+                 objects=owned(parlant_secret and parlant_secret + ':secret') + db_objects('parlant'))
 else:
-    idle_volumes.append('travel-agent-parlant:persistentvolumeclaim')
+    idle_volumes += db_objects('parlant')
 if LANGGRAPH:
     # Port-forwarded so the LangGraph service is reachable at localhost:8900.
     k8s_resource('travel-agent-langgraph', labels=['app'], port_forwards=8900,
-                 objects=owned('travel-agent-langgraph:persistentvolumeclaim',
-                               langgraph_secret and langgraph_secret + ':secret'))
+                 objects=owned(langgraph_secret and langgraph_secret + ':secret') + db_objects('langgraph'))
 else:
-    idle_volumes.append('travel-agent-langgraph:persistentvolumeclaim')
+    idle_volumes += db_objects('langgraph')
 k8s_resource(new_name='travel-agent-infra', labels=['infra'],
-             objects=['%s:namespace' % NAMESPACE, 'travel-agent:ingress'] + idle_volumes)
+             objects=['%s:namespace' % NAMESPACE, 'travel-agent:ingress', 'travel-agent-db:cluster']
+                     + (['travel-agent-db-metrics:podmonitor'] if PODMONITOR else []) + idle_volumes)

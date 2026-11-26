@@ -39,11 +39,11 @@ export class IntakeController {
    * The first call for a conversation claims it and returns its key.
    */
   @Put('identity')
-  setIdentity(
+  async setIdentity(
     @Param('conversationId') id: string,
     @Body() body: unknown,
     @Headers(CONVERSATION_KEY_HEADER) key?: string,
-  ): { conversationKey?: string } {
+  ): Promise<{ conversationKey?: string }> {
     return this.intake.setIdentity(
       conversationId(id),
       parse(GuestIdentitySchema, body),
@@ -53,11 +53,11 @@ export class IntakeController {
 
   /** Called by the web app when the guest confirms their trip brief. */
   @Put('trip')
-  confirmTrip(
+  async confirmTrip(
     @Param('conversationId') id: string,
     @Body() body: unknown,
     @Headers(CONVERSATION_KEY_HEADER) key?: string,
-  ): IntakeContext {
+  ): Promise<IntakeContext> {
     return this.intake.confirmTrip(
       conversationId(id),
       parse(TripBriefPropsSchema, body),
@@ -71,15 +71,15 @@ export class IntakeController {
    * Parlant agent's tool (intake token) when it shows one.
    */
   @Put('draft')
-  saveDraft(
+  async saveDraft(
     @Param('conversationId') id: string,
     @Body() body: unknown,
     @Headers(CONVERSATION_KEY_HEADER) key?: string,
     @Headers(IntakeHeader.Token) token?: string,
-  ): IntakeContext {
+  ): Promise<IntakeContext> {
     const cid = conversationId(id);
     if (token !== undefined) this.checkToken(token);
-    else this.intake.authorize(cid, key);
+    else await this.intake.authorize(cid, key);
     return this.intake.saveDraft(cid, parse(TripBriefPropsSchema, body));
   }
 
@@ -89,10 +89,10 @@ export class IntakeController {
    * guest's details.
    */
   @Get('context')
-  context(
+  async context(
     @Param('conversationId') id: string,
     @Headers(IntakeHeader.Token) token: string | undefined,
-  ): IntakeContext {
+  ): Promise<IntakeContext> {
     this.checkToken(token);
     return this.intake.context(conversationId(id));
   }
