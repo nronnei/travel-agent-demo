@@ -17,8 +17,8 @@ Env:
   PARLANT_HOME        SQLite stores (without Postgres), the embedding cache and
                       logs; read by Parlant at import, so set it in the environment
   OTEL_EXPORTER_OTLP_TRACES_ENDPOINT / _METRICS_ENDPOINT  turn on Parlant's
-                      OpenTelemetry export and the Anthropic token
-                      instrumentation (travel_agent/telemetry.py)
+                      OpenTelemetry export (the anthropic SDK then traces its
+                      own calls, metadata only)
   PARLANT_CONSOLE_SPANS=1  print spans to stdout again (travel_agent/otel_quiet.py)
 """
 
@@ -31,7 +31,7 @@ from parlant.core.common import IdGenerator
 from parlant.core.customers import CustomerDocumentStore
 from parlant.core.sessions import SessionDocumentStore
 
-from travel_agent import anthropic_thinking, otel_quiet, telemetry
+from travel_agent import anthropic_thinking, otel_quiet
 from travel_agent.agent import (
     DEFAULT_INTAKE_EFFORT,
     DEFAULT_PLANNING_EFFORT,
@@ -42,7 +42,6 @@ from travel_agent.postgres_db import PostgresDocumentDatabase
 
 anthropic_thinking.install()
 otel_quiet.install()
-telemetry.install_llm_instrumentation()
 
 
 # Parlant's default, which `local` stores also get: a store whose schema changed in

@@ -35,6 +35,7 @@
         "API_PROXY_TARGET",
         "VITE_*",
         "OTEL_*",
+        "ANTHROPIC_OPEN_TELEMETRY*",
         "TAVILY_PROJECT_PREFIX"
       ]
     }

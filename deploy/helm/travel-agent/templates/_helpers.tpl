@@ -222,6 +222,7 @@ OpenTelemetry env for one service, set into the given $env dict when
 otel.enabled. Values-level `<component>.env` entries are merged later in
 travel-agent.deployment and win.
 Usage: {{- $_ := include "travel-agent.otelEnv" (dict "root" . "env" $env "service" "travel-agent-api" "runtime" "node") -}}
+Add "anthropic" true for services that call Anthropic through its SDK (langgraph, parlant).
 */}}
 {{- define "travel-agent.otelEnv" -}}
 {{- $o := .root.Values.otel -}}
@@ -235,6 +236,10 @@ Usage: {{- $_ := include "travel-agent.otelEnv" (dict "root" . "env" $env "servi
 {{- $_ := set $env "OTEL_PROPAGATORS" "tracecontext" -}}
 {{- $_ := set $env "OTEL_TRACES_SAMPLER" $o.tracesSampler -}}
 {{- $_ := set $env "OTEL_METRIC_EXPORT_INTERVAL" (toString $o.metricExportIntervalMs) -}}
+{{- if .anthropic -}}
+{{- /* The anthropic SDKs trace their own calls; keep them to metadata (their default) explicitly. */ -}}
+{{- $_ := set $env "ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE" "metadata_only" -}}
+{{- end -}}
 {{- if eq .runtime "node" -}}
 {{- $_ := set $env "OTEL_EXPORTER_OTLP_ENDPOINT" $o.endpoint -}}
 {{- $_ := set $env "OTEL_TRACES_EXPORTER" "otlp" -}}
@@ -244,7 +249,6 @@ Usage: {{- $_ := include "travel-agent.otelEnv" (dict "root" . "env" $env "servi
 {{- else -}}
 {{- $_ := set $env "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT" (printf "%s/v1/traces" (trimSuffix "/" $o.endpoint)) -}}
 {{- $_ := set $env "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT" (printf "%s/v1/metrics" (trimSuffix "/" $o.endpoint)) -}}
-{{- $_ := set $env "TRACELOOP_TRACE_CONTENT" "false" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
