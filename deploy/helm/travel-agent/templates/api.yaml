@@ -7,7 +7,10 @@
 {{- $ctx := dict "root" . "component" "api" "values" .Values.api -}}
 {{- $env := dict "PORT" .Values.api.containerPort -}}
 {{- with .Values.inkeep -}}
-{{- if .apiUrl -}}
+{{- if .server.enabled -}}
+{{- /* The in-chart Inkeep (templates/inkeep.yaml); apiUrl is ignored. */ -}}
+{{- $_ := set $env "INKEEP_AGENTS_API_URL" (printf "http://%s:%v" (include "travel-agent.componentName" (dict "root" $ "component" "inkeep-api")) .server.api.service.port) -}}
+{{- else if .apiUrl -}}
 {{- $_ := set $env "INKEEP_AGENTS_API_URL" .apiUrl -}}
 {{- end -}}
 {{- $_ := set $env "INKEEP_TENANT_ID" .tenantId -}}
@@ -23,14 +26,22 @@
 {{- $_ := set $env "LANGGRAPH_API_URL" (printf "http://%s:%v" (include "travel-agent.componentName" (dict "root" . "component" "langgraph")) .Values.langgraph.service.port) -}}
 {{- end -}}
 {{- $extra := dict -}}
+{{- $secretEnv := list -}}
+{{- if .Values.inkeep.server.enabled -}}
+{{- /* The run API bypass secret comes from the Inkeep server's own Secret. */ -}}
+{{- $secretEnv = append $secretEnv (dict "name" "INKEEP_AGENTS_RUN_API_BYPASS_SECRET" "secret" .Values.inkeep.server.secret "key" "INKEEP_AGENTS_RUN_API_BYPASS_SECRET") -}}
+{{- end -}}
 {{- if .Values.postgres.enabled -}}
 {{- /* The API owns the cluster's bootstrap database; the operator writes its credentials. */ -}}
 {{- $cluster := include "travel-agent.postgresClusterName" . -}}
 {{- $ca := fromYaml (include "travel-agent.postgresCaMounts" .) -}}
 {{- $_ := set $env "DATABASE_SSL_ROOT_CERT" "/etc/postgres-ca/ca.crt" -}}
-{{- $_ := set $extra "secretEnv" (list (dict "name" "DATABASE_URL" "secret" (printf "%s-app" $cluster) "key" "uri")) -}}
+{{- $secretEnv = append $secretEnv (dict "name" "DATABASE_URL" "secret" (printf "%s-app" $cluster) "key" "uri") -}}
 {{- $_ := set $extra "volumes" (list $ca.volume) -}}
 {{- $_ := set $extra "volumeMounts" (list $ca.mount) -}}
+{{- end -}}
+{{- if $secretEnv -}}
+{{- $_ := set $extra "secretEnv" $secretEnv -}}
 {{- end -}}
 {{ include "travel-agent.deployment" (merge (dict "env" $env "envFromSecret" .Values.inkeep.existingSecret) $extra $ctx) }}
 ---

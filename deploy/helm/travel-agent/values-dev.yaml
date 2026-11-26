@@ -23,6 +23,13 @@ web:
 # (scripts/push-agents.sh dev), so pushes for dev and prod don't collide.
 inkeep:
   projectId: travel-agent-dev
+  # Dev's own Inkeep (Tilt turns it on with --chat-backend=inkeep, the default); its
+  # databases stay while another backend is selected.
+  server:
+    keepDatabases: true
+    doltgres:
+      storage:
+        storageClassName: longhorn
 
 # The dev namespace's own Postgres cluster (travel-agent-db). Longhorn like the
 # other dev volumes; the homelab values pick longhorn-workers for prod.

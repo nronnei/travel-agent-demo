@@ -13,6 +13,13 @@ database. pg_hba lets each role reach only its own database, and only over TLS.
 {{- $backends = append $backends $component -}}
 {{- end -}}
 {{- end -}}
+{{- /* The in-chart Inkeep: its run DB ("inkeep") and SpiceDB's datastore ("spicedb"). */ -}}
+{{- if or .Values.inkeep.server.enabled .Values.inkeep.server.keepDatabases -}}
+{{- if not $pg.enabled -}}
+{{- fail "inkeep.server.enabled needs postgres.enabled=true (Inkeep's run DB and SpiceDB's datastore live in the release's cluster)" -}}
+{{- end -}}
+{{- $backends = concat $backends (list "inkeep" "spicedb") -}}
+{{- end -}}
 {{- if $pg.enabled -}}
 {{- $cluster := include "travel-agent.postgresClusterName" . -}}
 apiVersion: postgresql.cnpg.io/v1

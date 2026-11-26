@@ -1,0 +1,297 @@
+{{- /*
+Inkeep, deployed by this chart (inkeep.server.enabled): agents-api with its migrations,
+the manage UI, SpiceDB (authorization) and Doltgres (the manage DB). The run DB and
+SpiceDB's datastore are the "inkeep" and "spicedb" databases on the release's CNPG
+cluster (templates/postgres.yaml). Mirrors Inkeep's docker-compose, as the homelab's
+app-template values did.
+*/ -}}
+{{- $s := .Values.inkeep.server -}}
+{{- if $s.enabled -}}
+{{- if not $s.secret -}}
+{{- fail "inkeep.server.enabled needs inkeep.server.secret (the Inkeep server's Secret; see values.yaml)" -}}
+{{- end -}}
+{{- $root := . -}}
+{{- $cluster := include "travel-agent.postgresClusterName" . -}}
+{{- $tls := "sslmode=verify-full&sslrootcert=/etc/postgres-ca/ca.crt" -}}
+{{- $apiName := include "travel-agent.componentName" (dict "root" . "component" "inkeep-api") -}}
+{{- $spicedbName := include "travel-agent.componentName" (dict "root" . "component" "inkeep-spicedb") -}}
+{{- $doltgresName := include "travel-agent.componentName" (dict "root" . "component" "inkeep-doltgres") -}}
+{{- $runDb := fromYaml (include "travel-agent.postgresConnection" (dict "root" . "component" "inkeep" "prefix" "INKEEP_" "urlName" "INKEEP_AGENTS_RUN_DATABASE_URL" "query" $tls)) -}}
+{{- /* Shared by the API and its migrate init container. */ -}}
+{{- $env := merge (dict
+  "ENVIRONMENT" "production"
+  "LOG_LEVEL" "info"
+  "INKEEP_AGENTS_API_URL" $s.api.publicUrl
+  "INKEEP_AGENTS_MANAGE_UI_URL" $s.api.manageUiUrl
+  "INKEEP_AGENTS_MANAGE_DATABASE_URL" (printf "postgresql://inkeep:$(DOLTGRES_PASSWORD)@%s:5432/inkeep_agents" $doltgresName)
+  "SPICEDB_ENDPOINT" (printf "%s:50051" $spicedbName)
+  "SPICEDB_TLS_ENABLED" "false"
+  "BLOB_STORAGE_LOCAL_PATH" "/data/blob-storage"
+) $runDb.env -}}
+{{- $secretEnv := append $runDb.secretEnv (dict "name" "DOLTGRES_PASSWORD" "secret" $s.secret "key" "DOLTGRES_PASSWORD") -}}
+{{- /* Init containers don't go through the deployment helper, so spell their env out (secrets first). */ -}}
+{{- $initEnv := list -}}
+{{- range $secretEnv -}}
+{{- $initEnv = append $initEnv (dict "name" .name "valueFrom" (dict "secretKeyRef" (dict "name" .secret "key" .key))) -}}
+{{- end -}}
+{{- range $k, $v := $env -}}
+{{- $initEnv = append $initEnv (dict "name" $k "value" ($v | toString)) -}}
+{{- end -}}
+{{- /*
+CNPG creates database roles asynchronously, so each pod that migrates waits until its
+role can log in (the cluster's own image has psql). $dbEnv holds the password var.
+*/ -}}
+{{- $pgImage := .Values.postgres.imageName -}}
+{{- $waitDb := dict
+  "name" "wait-db"
+  "image" $pgImage
+  "command" (list "sh" "-c" "until psql \"$INKEEP_AGENTS_RUN_DATABASE_URL\" -qtAc 'select 1' >/dev/null 2>&1; do echo waiting for the inkeep role; sleep 2; done")
+  "env" $initEnv
+  "volumeMounts" (list $runDb.mount)
+-}}
+{{- $migrate := dict
+  "name" "migrate"
+  "image" (printf "%s:%s" $s.api.migrateImage.repository ($s.api.migrateImage.tag | default $s.version))
+  "imagePullPolicy" $s.api.image.pullPolicy
+  "envFrom" (list (dict "secretRef" (dict "name" $s.secret)))
+  "env" $initEnv
+  "volumeMounts" (list $runDb.mount)
+-}}
+{{- $blob := dict "name" "blob-storage" -}}
+{{- if $s.api.blobStorage.persistence.enabled -}}
+{{- $_ := set $blob "persistentVolumeClaim" (dict "claimName" (printf "%s-blob" $apiName)) -}}
+{{- else -}}
+{{- $_ := set $blob "emptyDir" (dict) -}}
+{{- end -}}
+{{- $apiValues := merge (dict "image" (dict "tag" ($s.api.image.tag | default $s.version))) $s.api -}}
+{{- $ctx := dict "root" . "component" "inkeep-api" "values" $apiValues -}}
+{{ include "travel-agent.deployment" (merge (dict
+  "env" $env
+  "envFromSecret" $s.secret
+  "secretEnv" $secretEnv
+  "initContainers" (list $waitDb $migrate)
+  "strategy" (dict "type" "Recreate")
+  "volumes" (list $runDb.volume $blob)
+  "volumeMounts" (list $runDb.mount (dict "name" "blob-storage" "mountPath" "/data/blob-storage"))
+) $ctx) }}
+---
+{{ include "travel-agent.service" $ctx }}
+{{- if $s.api.blobStorage.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $apiName }}-blob
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inkeep-api
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with $s.api.blobStorage.persistence.storageClassName }}
+  storageClassName: {{ . }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ $s.api.blobStorage.persistence.size }}
+{{- end }}
+{{- if $s.ui.enabled }}
+{{- $uiValues := merge (dict "image" (dict "tag" ($s.ui.image.tag | default $s.version)) "probe" (dict "tcpSocket" (dict "port" "http"))) $s.ui }}
+{{- $uiCtx := dict "root" . "component" "inkeep-ui" "values" $uiValues }}
+---
+{{ include "travel-agent.deployment" (merge (dict
+  "env" (dict
+    "ENVIRONMENT" "production"
+    "LOG_LEVEL" "info"
+    "INKEEP_AGENTS_API_URL" (printf "http://%s:%v" $apiName $s.api.service.port)
+    "PUBLIC_INKEEP_AGENTS_API_URL" $s.api.publicUrl
+  )
+  "envFromSecret" $s.secret
+) $uiCtx) }}
+---
+{{ include "travel-agent.service" $uiCtx }}
+{{- end }}
+{{- $spicedbDb := fromYaml (include "travel-agent.postgresConnection" (dict "root" . "component" "spicedb" "prefix" "SPICEDB_" "urlName" "SPICEDB_DATASTORE_CONN_URI" "query" $tls)) }}
+{{- $spicedbEnv := list }}
+{{- range $spicedbDb.secretEnv }}
+{{- $spicedbEnv = append $spicedbEnv (dict "name" .name "valueFrom" (dict "secretKeyRef" (dict "name" .secret "key" .key))) }}
+{{- end }}
+{{- $spicedbEnv = concat $spicedbEnv (list
+  (dict "name" "SPICEDB_DATASTORE_ENGINE" "value" "postgres")
+  (dict "name" "SPICEDB_DATASTORE_CONN_URI" "value" $spicedbDb.env.SPICEDB_DATASTORE_CONN_URI)
+) }}
+{{- $spicedbImage := printf "%s:%s" $s.spicedb.image.repository $s.spicedb.image.tag }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $spicedbName }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inkeep-spicedb
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "travel-agent.selectorLabels" (dict "root" . "component" "inkeep-spicedb") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "travel-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: inkeep-spicedb
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        - name: wait-db
+          image: {{ $root.Values.postgres.imageName }}
+          command: [sh, -c, 'until psql "$SPICEDB_DATASTORE_CONN_URI" -qtAc "select 1" >/dev/null 2>&1; do echo waiting for the spicedb role; sleep 2; done']
+          env:
+            {{- toYaml $spicedbEnv | nindent 12 }}
+          volumeMounts:
+            - {{ toYaml $spicedbDb.mount | nindent 14 | trim }}
+        - name: migrate
+          image: {{ $spicedbImage }}
+          args: [migrate, head]
+          env:
+            {{- toYaml $spicedbEnv | nindent 12 }}
+          volumeMounts:
+            - {{ toYaml $spicedbDb.mount | nindent 14 | trim }}
+      containers:
+        - name: spicedb
+          image: {{ $spicedbImage }}
+          args: [serve]
+          ports:
+            - name: grpc
+              containerPort: 50051
+          env:
+            {{- toYaml $spicedbEnv | nindent 12 }}
+            - name: SPICEDB_GRPC_PRESHARED_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.secret }}
+                  key: SPICEDB_PRESHARED_KEY
+            - name: SPICEDB_TELEMETRY_ENDPOINT
+              value: ''
+            - name: SPICEDB_METRICS_ENABLED
+              value: 'false'
+          readinessProbe:
+            grpc:
+              port: 50051
+            periodSeconds: 10
+          livenessProbe:
+            grpc:
+              port: 50051
+            periodSeconds: 10
+          {{- with $s.spicedb.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - {{ toYaml $spicedbDb.mount | nindent 14 | trim }}
+      volumes:
+        - {{ toYaml $spicedbDb.volume | nindent 10 | trim }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $spicedbName }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inkeep-spicedb
+spec:
+  selector:
+    {{- include "travel-agent.selectorLabels" (dict "root" . "component" "inkeep-spicedb") | nindent 4 }}
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: grpc
+---
+# The manage DB. Doltgres isn't Postgres, so it can't live on CNPG. Its volume comes
+# from volumeClaimTemplates, so it outlives `helm uninstall` and `tilt down`.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $doltgresName }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inkeep-doltgres
+spec:
+  serviceName: {{ $doltgresName }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "travel-agent.selectorLabels" (dict "root" . "component" "inkeep-doltgres") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "travel-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: inkeep-doltgres
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: doltgres
+          image: {{ $s.doltgres.image.repository }}:{{ $s.doltgres.image.tag }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: DOLTGRES_DB
+              value: inkeep_agents
+            - name: DOLTGRES_USER
+              value: inkeep
+            - name: DOLTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $s.secret }}
+                  key: DOLTGRES_PASSWORD
+          readinessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 5432
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          {{- with $s.doltgres.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/doltgres
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with $s.doltgres.storage.storageClassName }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ $s.doltgres.storage.size }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $doltgresName }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: inkeep-doltgres
+spec:
+  selector:
+    {{- include "travel-agent.selectorLabels" (dict "root" . "component" "inkeep-doltgres") | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}

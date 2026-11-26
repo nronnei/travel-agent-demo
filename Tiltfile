@@ -12,8 +12,8 @@
 # release deployment (`npm run deploy`) in the travel-agent namespace.
 #
 # Pick the agent backend with `tilt up -- --chat-backend=parlant|langgraph`
-# (default: inkeep). Only the selected in-cluster agent (Parlant or LangGraph) is
-# built and deployed. Changing it while Tilt runs (`tilt args -- --chat-backend=...`)
+# (default: inkeep). Only the selected agent is built or deployed: Inkeep runs from
+# its published images, in this namespace, with its own databases in the dev cluster. Changing it while Tilt runs (`tilt args -- --chat-backend=...`)
 # redeploys the API and swaps the agent; each agent's volume stays, so its saved
 # conversations survive the switch.
 #
@@ -28,6 +28,7 @@ CFG = config.parse()
 CHAT_BACKEND = CFG.get('chat-backend', 'inkeep')
 if CHAT_BACKEND not in ['inkeep', 'parlant', 'langgraph']:
     fail('--chat-backend must be inkeep, parlant or langgraph, not %s' % CHAT_BACKEND)
+INKEEP = CHAT_BACKEND == 'inkeep'
 PARLANT = CHAT_BACKEND == 'parlant'
 LANGGRAPH = CHAT_BACKEND == 'langgraph'
 SEARCH_PROVIDER = CFG.get('search-provider', 'tavily')
@@ -57,6 +58,20 @@ HOST = read_yaml(HOMELAB_DEV_VALUES)['ingress']['host']
 PODMONITOR = cluster.get('postgres', {}).get('podMonitor', {}).get('enabled', False)
 
 namespace_create(NAMESPACE)
+
+# Tilt only manages what this run deploys, so a backend selected in an earlier run
+# keeps running after a switch. Remove the other backends' workloads (Deployments,
+# StatefulSets, Services); their volumes, Secrets and databases stay, so switching
+# back picks up where it left off.
+BACKEND_COMPONENTS = {
+    'inkeep': ['inkeep-api', 'inkeep-ui', 'inkeep-spicedb', 'inkeep-doltgres'],
+    'parlant': ['parlant'],
+    'langgraph': ['langgraph'],
+}
+STALE = [c for b, cs in BACKEND_COMPONENTS.items() if b != CHAT_BACKEND for c in cs]
+local(("kubectl -n %s delete deployment,statefulset,service --ignore-not-found --wait=false " +
+       "-l 'app.kubernetes.io/instance=travel-agent,app.kubernetes.io/component in (%s)'")
+      % (NAMESPACE, ','.join(STALE)), quiet=True)
 
 def read_dotenv(path):
     """KEY=VALUE lines from a .env file (no interpolation), or {} if it's missing."""
@@ -98,12 +113,12 @@ def dev_secret(name, keys, extra={}):
     }))
     return name
 
-def basic_auth_secret(name, username, key):
-    """A kubernetes.io/basic-auth Secret for a CNPG DatabaseRole, its password from .env;
-    returns its name, or ''. Applied with kubectl rather than k8s_yaml: Tilt scrubs the
-    values of Secrets it deploys from every log, and the usernames ("langgraph",
+def basic_auth_secret(name, username, key, source=None):
+    """A kubernetes.io/basic-auth Secret for a CNPG DatabaseRole, its password from .env
+    (or `source`); returns its name, or ''. Applied with kubectl rather than k8s_yaml: Tilt
+    scrubs the values of Secrets it deploys from every log, and the usernames ("langgraph",
     "parlant") are everyday words there. Like the cluster, it outlives `tilt down`."""
-    password = DOTENV.get(key)
+    password = (source if source != None else DOTENV).get(key)
     if not password:
         warn('.env is missing %s: the %s database role has no password, so %s can\'t connect' % (key, username, username))
         return ''
@@ -116,29 +131,27 @@ def basic_auth_secret(name, username, key):
     }))
     return name
 
+# Dev's own Inkeep (inkeep.server.enabled). Its generated secrets live in the gitignored
+# .tilt/inkeep-dev.env, made once and then reused, so sessions and JWTs survive
+# restarts. Delete the file (and the Inkeep databases) to start over.
+INKEEP_DEV_ENV = '.tilt/inkeep-dev.env'
+if not os.path.exists(INKEEP_DEV_ENV):
+    local('mkdir -p .tilt && umask 077 && scripts/inkeep-secrets.sh generate > %s' % INKEEP_DEV_ENV,
+          quiet=True, echo_off=True)
+INKEEP_ENV = read_dotenv(INKEEP_DEV_ENV)
+
 helm_set = [
     'chat.backend=' + CHAT_BACKEND,
+    'inkeep.server.enabled=' + str(INKEEP).lower(),
     'parlant.enabled=' + str(PARLANT).lower(),
     'langgraph.enabled=' + str(LANGGRAPH).lower(),
     'parlant.image.repository=' + PARLANT_IMAGE,
     'langgraph.image.repository=' + LANGGRAPH_IMAGE,
     'api.env.SEARCH_PROVIDER=' + SEARCH_PROVIDER,
 ]
-def inkeep_bypass_secret():
-    """The homelab Inkeep's run API bypass secret, which the API needs for /api/chat.
-    Read from the cluster, since .env holds the local Inkeep's. Never printed."""
-    out = local(
-        "kubectl -n inkeep get secret inkeep-secrets -o jsonpath='{.data.INKEEP_AGENTS_RUN_API_BYPASS_SECRET}' 2>/dev/null | base64 -d",
-        quiet=True, echo_off=True)
-    value = str(out).strip()
-    if not value:
-        warn('No INKEEP_AGENTS_RUN_API_BYPASS_SECRET in inkeep/inkeep-secrets: Inkeep chat will return 503')
-    return value
-
 api_secret = dev_secret('travel-agent-api-dev',
                         ['INTAKE_API_TOKEN', 'TAVILY_API_KEY', 'SEARCH_API_TOKEN',
-                         'LANGGRAPH_API_TOKEN'],
-                        {'INKEEP_AGENTS_RUN_API_BYPASS_SECRET': inkeep_bypass_secret()})
+                         'LANGGRAPH_API_TOKEN'])
 if api_secret:
     helm_set.append('inkeep.existingSecret=' + api_secret)
 parlant_secret = PARLANT and dev_secret('travel-agent-parlant-dev',
@@ -153,11 +166,19 @@ langgraph_secret = LANGGRAPH and dev_secret('travel-agent-langgraph-dev',
                                              'SEARCH_API_TOKEN', 'LANGGRAPH_API_TOKEN'])
 if langgraph_secret:
     helm_set.append('langgraph.existingSecret=' + langgraph_secret)
+# The in-chart Inkeep's Secret: its generated values plus the keys it shares with the API.
+inkeep_secret = INKEEP and dev_secret('travel-agent-inkeep-dev',
+                                      ['ANTHROPIC_API_KEY', 'SEARCH_API_TOKEN', 'INTAKE_API_TOKEN'],
+                                      {k: v for k, v in INKEEP_ENV.items() if not k.endswith('_DB_PASSWORD')})
+if inkeep_secret:
+    helm_set.append('inkeep.server.secret=' + inkeep_secret)
 # Passwords for the backends' roles in the dev Postgres cluster (values-dev.yaml
 # turns both on, whichever backend is selected). Existing .env files predate these
 # keys: add them by hand (openssl rand -hex 32).
 basic_auth_secret('travel-agent-db-langgraph', 'langgraph', 'LANGGRAPH_DB_PASSWORD')
 basic_auth_secret('travel-agent-db-parlant', 'parlant', 'PARLANT_DB_PASSWORD')
+basic_auth_secret('travel-agent-db-inkeep', 'inkeep', 'INKEEP_DB_PASSWORD', INKEEP_ENV)
+basic_auth_secret('travel-agent-db-spicedb', 'spicedb', 'SPICEDB_DB_PASSWORD', INKEEP_ENV)
 
 k8s_yaml(helm(
     CHART,
@@ -263,6 +284,32 @@ if LANGGRAPH:
                  objects=owned(langgraph_secret and langgraph_secret + ':secret') + db_objects('langgraph'))
 else:
     idle_volumes += db_objects('langgraph')
+if INKEEP:
+    # Its Secret and database objects first: every Inkeep pod needs them at start.
+    k8s_resource(new_name='travel-agent-inkeep-config', labels=['inkeep'],
+                 objects=owned(inkeep_secret and inkeep_secret + ':secret')
+                         + db_objects('inkeep') + db_objects('spicedb'))
+    k8s_resource('travel-agent-inkeep-doltgres', labels=['inkeep'],
+                 resource_deps=['travel-agent-inkeep-config'])
+    k8s_resource('travel-agent-inkeep-spicedb', labels=['inkeep'],
+                 resource_deps=['travel-agent-inkeep-config'])
+    # Port-forwarded: the manage UI (localhost:3003) talks to the API from the browser
+    # (localhost:3002), and the agents are pushed through it.
+    k8s_resource('travel-agent-inkeep-api', labels=['inkeep'], port_forwards='3002:3002',
+                 resource_deps=['travel-agent-inkeep-spicedb', 'travel-agent-inkeep-doltgres'])
+    k8s_resource('travel-agent-inkeep-ui', labels=['inkeep'], port_forwards='3003:3000',
+                 links=[link('http://localhost:3003', 'manage UI')],
+                 resource_deps=['travel-agent-inkeep-api'])
+    # Push the agents once both APIs are up (Inkeep discovers the web_search MCP tool
+    # from the travel-agent API on push), and again whenever their source changes.
+    local_resource('inkeep-push', labels=['inkeep'],
+                   cmd='scripts/push-agents.sh dev',
+                   env={'INKEEP_API': 'http://localhost:3002', 'INKEEP_UI': 'http://localhost:3003',
+                        'INKEEP_MANAGE_KEY': INKEEP_ENV.get('INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET', '')},
+                   deps=['apps/agents/src'],
+                   resource_deps=['travel-agent-inkeep-api', 'travel-agent-api'])
+else:
+    idle_volumes += db_objects('inkeep') + db_objects('spicedb')
 k8s_resource(new_name='travel-agent-infra', labels=['infra'],
              objects=['%s:namespace' % NAMESPACE, 'travel-agent:ingress', 'travel-agent-db:cluster']
                      + (['travel-agent-db-metrics:podmonitor'] if PODMONITOR else []) + idle_volumes)
