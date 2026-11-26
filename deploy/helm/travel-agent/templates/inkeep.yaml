@@ -63,6 +63,8 @@ role can log in (the cluster's own image has psql). $dbEnv holds the password va
 {{- else -}}
 {{- $_ := set $blob "emptyDir" (dict) -}}
 {{- end -}}
+{{- /* OTEL for the API container only (Inkeep turns its SDK on when the endpoint is set). */ -}}
+{{- $_ := include "travel-agent.otelEnv" (dict "root" . "env" $env "service" "travel-agent-inkeep" "runtime" "node") -}}
 {{- $apiValues := merge (dict "image" (dict "tag" ($s.api.image.tag | default $s.version))) $s.api -}}
 {{- $ctx := dict "root" . "component" "inkeep-api" "values" $apiValues -}}
 {{ include "travel-agent.deployment" (merge (dict

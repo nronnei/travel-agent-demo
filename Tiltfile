@@ -158,7 +158,7 @@ helm_set = [
     'api.env.SEARCH_PROVIDER=' + SEARCH_PROVIDER,
     # Always set, so the homelab (prod) values never leak prod labels into dev.
     'otel.enabled=' + str(OTEL == 'on').lower(),
-    'otel.endpoint=' + OTEL_ENDPOINT,
+    'otel.upstreamEndpoint=' + OTEL_ENDPOINT,
     'otel.environment=dev',
 ]
 api_secret = dev_secret('travel-agent-api-dev',
@@ -322,6 +322,9 @@ if INKEEP:
                    resource_deps=['travel-agent-inkeep-api', 'travel-agent-api'])
 else:
     idle_volumes += db_objects('inkeep') + db_objects('spicedb')
+if OTEL == 'on':
+    # This namespace's own collector: apps export to it, it forwards to the central Alloy.
+    k8s_resource('travel-agent-alloy', labels=['infra'], objects=['travel-agent-alloy:configmap'])
 k8s_resource(new_name='travel-agent-infra', labels=['infra'],
              objects=['%s:namespace' % NAMESPACE, 'travel-agent:ingress', 'travel-agent-db:cluster']
                      + (['travel-agent-db-metrics:podmonitor'] if PODMONITOR else []) + idle_volumes)
