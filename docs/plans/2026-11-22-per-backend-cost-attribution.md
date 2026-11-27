@@ -888,6 +888,34 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
   - Cold start (process start → listening, warm local DB, 7 runs, median): OTEL off 758 ms, on 1,342 ms: **+0.58 s, passes the ≤ 1 s bar**. An explicit allow-list (http, undici, pg, runtime-node, `@fastify/otel`) measured 1,162 ms (+0.40 s); not needed. Every mode, including OTEL off, had occasional ~1 s outliers, so they're environmental.
   - Still to run under Tilt: hot reload, Tempo/Prometheus checks, RSS and p99 bars.
 - **Order (rev 13 note, superseded by rev 14's step 7):** the trace-content checks run once, after every instrumentation is in place, one Tilt session per backend.
+- **Step 3's deferred gates and step 7 (2026-11-26, Tilt dev images, one run per backend; the traffic driver and trace scanner are scratch scripts, not committed):**
+  - **Performance, LangGraph, 20 conversations each (25 turns, 5 planner turns with searches):**
+
+    | | OTEL off | OTEL on |
+    |---|---|---|
+    | TTFB p50 / p99 | 55 / 166 ms | 65 / 297 ms |
+    | Total p50 / p99 | 2.14 / 13.86 s | 2.02 / 13.09 s |
+    | Peak RSS api / langgraph | 771 / 380 MB | 804 / 447 MB |
+    | project Alloy | — | 51 MB |
+
+    Total-turn p99 is within the ≤ 5% bar. The TTFB p99 rose by 131 ms (from a 25-sample max, so noisy). **The RSS bar can't be judged on dev images:** with OTEL **off**, api is already at 75% of its 1 GiB dev limit and langgraph at 74% of 512 MiB, because dev images run turbo, `nest --watch`/`tsc --watch`/`tsx watch`. With OTEL on, langgraph is at 87%. **Open item:** measure RSS on the runtime images in rollout step 4 (LangGraph's prod limit is 512 MiB); raising it or the allow-list fallback are the levers. The API autocannon run wasn't done: the permission check blocked reading `INTAKE_API_TOKEN` from `.env` and running `npx -y autocannon`.
+  - **Attribution and trace shape:** one LangGraph turn is one connected trace (api → langgraph → api `POST /api/search/web` → the Tavily client span). Prometheus has `client` series for langgraph, parlant and inkeep, each with `credits=1` per search in the API log.
+  - **Token span sources (step 8's rule is written from these):**
+
+    | Backend | Scope | Span | `gen_ai.usage.input_tokens` | Labels present |
+    |---|---|---|---|---|
+    | LangGraph | `com.anthropic.sdk.typescript` | `anthropic.messages.create` (30 for 30 calls) | includes cache | `gen_ai.provider.name`, request/response model |
+    | Parlant | `com.anthropic.sdk.python` | `anthropic.messages.create` (32 for 32 calls; `count_tokens` spans carry no `gen_ai.usage.*`) | includes cache (`cache_write`/`cache_read` attrs) | same |
+    | Inkeep | `ai` | `ai.streamText.doStream` only (8 for 8 calls; the outer span has no `gen_ai.usage.*`) | includes cache (10,311 = 226 + 10,085 + 0) | `gen_ai.system=anthropic.messages` (**no** `gen_ai.provider.name`), request/response model, `project.id` |
+
+    One meaning of `input` everywhere, so the rule reads `gen_ai.usage.input_tokens` and `output_tokens` as they are; `gen_ai.response.model` is the model label; provider stays optional.
+  - ⛔ **Credential search (prefix and pattern based):** across 331 traces (78 LangGraph window, 229 Parlant, 24 Inkeep), no `sk-ant-…`, `tvly-…`, `Bearer <value>` or `postgres://user:pass@` anywhere, including span events and exception messages, and no authorization, cookie, intake-token or conversation-key attributes. Each backend's forced Anthropic error (a fake `sk-ant-api03-…` key set in the pod's env) is traced as `authentication_error` / `invalid x-api-key` / `401`, and the fake key never appears. **Not done:** an exact-value search for each real secret, because reading the secret values was blocked by the permission check; the pattern search covers their formats.
+  - ⛔ **Content off for the Anthropic SDKs:** no prompt or completion attributes or events on LangGraph's or Parlant's SDK spans.
+  - **Guest text (record-only, rev 5 accepted risk):** Parlant's own tracer records agent replies (with the guest's name) as `loop.message` span events on `compass.loop.step`; Inkeep's AI SDK telemetry records `ai.prompt`, `ai.prompt.messages`, `ai.prompt.tools` and `ai.response.text`. Parlant's console spans don't reach its logs (`otel_quiet` works: 0 span lines).
+  - **Parlant forced error:** Parlant validates the key at startup, so a bad key crash-loops the new pod (the old one keeps serving); its startup 401 is traced without the key. A runtime auth error isn't reachable without a code change.
+  - **Not run:** the DB connection-failure case (it means stopping the shared dev database).
+  - **Found and fixed: first-sample undercount.** Prometheus' `increase()` uses a new series' first sample as its baseline, so the 3 Inkeep searches made before the series' first export counted as 0. `SearchMetrics` now creates every `client × outcome` series (and credits per client) at 0 at startup (`search.metrics.spec.ts`). **The token metric has the same exposure** (each new model/type/service series loses its first data point, and again after a collector restart); step 8 options: accept it (small, long-lived series), or Prometheus' created-timestamp zero injection for OTLP (a central change, not made).
+  - Tilt also prunes the collector when `--otel=off` now.
 - **Rebase:** PR #6 merged as `3f72f29`; the cost work was committed (lockfiles, plan, steps 1–4) and rebased onto it. One conflict, `templates/api.yaml` (secretEnv vs `otelEnv`), resolved by keeping both. Typecheck in all workspaces and API, LangGraph and Parlant tests pass after the rebase.
 - **Step 6a:** done. A mock-Anthropic run through LangGraph's preload gives exactly one usage span per call, all from scope `com.anthropic.sdk.typescript` (input 118 = 11 + 100 + 7, the beta path included), and no prompt or completion text.
 - **Step 6:**

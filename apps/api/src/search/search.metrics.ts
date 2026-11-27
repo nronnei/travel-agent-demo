@@ -1,9 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { metrics, type Counter } from '@opentelemetry/api';
-import type { SearchClient } from '@travel-agent/shared';
+import { SearchClients, type SearchClient } from '@travel-agent/shared';
 
 /** How a search ended. Invalid requests aren't searches, so they aren't counted. */
-export type SearchOutcome = 'ok' | 'cached' | 'limited' | 'error' | 'off';
+export const SearchOutcomes = ['ok', 'cached', 'limited', 'error', 'off'] as const;
+export type SearchOutcome = (typeof SearchOutcomes)[number];
 
 /**
  * The two search cost counters. Without an OTEL SDK (tests, OTEL off) the
@@ -24,6 +25,13 @@ export class SearchMetrics {
       description:
         'Provider credits reported per search (a lower bound: timed-out calls may still be billed)',
     });
+    // Start every series at 0. Prometheus' increase() takes a new series' first
+    // sample as its baseline, so a series first exported at 3 would count as 0.
+    for (const client of [...SearchClients, 'unknown'] as const) {
+      this.creditsUsed.add(0, { client });
+      for (const outcome of SearchOutcomes)
+        this.requests.add(0, { client, outcome });
+    }
   }
 
   request(client: SearchClient, outcome: SearchOutcome): void {

@@ -77,6 +77,8 @@ BACKEND_COMPONENTS = {
     'langgraph': ['langgraph'],
 }
 STALE = [c for b, cs in BACKEND_COMPONENTS.items() if b != CHAT_BACKEND for c in cs]
+if OTEL != 'on':
+    STALE.append('alloy')  # the namespace's collector, when OTEL is off
 local(("kubectl -n %s delete deployment,statefulset,service --ignore-not-found --wait=false " +
        "-l 'app.kubernetes.io/instance=travel-agent,app.kubernetes.io/component in (%s)'")
       % (NAMESPACE, ','.join(STALE)), quiet=True)
