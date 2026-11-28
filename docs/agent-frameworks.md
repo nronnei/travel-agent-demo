@@ -368,7 +368,7 @@ queries). Pick the environment with its **Environment** variable.
 | Known gaps       | none found                                                                               | Voyage embeddings aren't counted                                | none found                                                   |
 
 The metric matched the sum of the counted spans in Tempo exactly for all three
-backends (see the plan's implementation notes). `deploy/alloy/test/token-rule.sh`
+backends in dev runs (2026-11-28). `deploy/alloy/test/token-rule.sh`
 tests the rule against recorded span shapes.
 
 ### Setup checklist

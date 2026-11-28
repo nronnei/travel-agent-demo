@@ -1,6 +1,6 @@
-"""OTLP/JSON trace fixtures for the token rule: one span per source, shaped like the
-spans recorded in the plan's step 7 (scopes, span names, attribute names), plus spans
-the rule must ignore. Prints the request body to stdout."""
+"""OTLP/JSON trace fixtures for the token rule: one span per source, shaped like
+spans recorded from real traffic on each backend (scopes, span names, attribute
+names), plus spans the rule must ignore. Prints the request body to stdout."""
 
 import json
 import time
