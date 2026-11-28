@@ -33,7 +33,10 @@
         "TAVILY_API_KEY",
         "SEARCH_*",
         "API_PROXY_TARGET",
-        "VITE_*"
+        "VITE_*",
+        "OTEL_*",
+        "ANTHROPIC_OPEN_TELEMETRY*",
+        "TAVILY_PROJECT_PREFIX"
       ]
     }
   }

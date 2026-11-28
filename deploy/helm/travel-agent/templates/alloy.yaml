@@ -1,0 +1,290 @@
+{{- /*
+This release's own collector (otel.enabled). Every service exports OTLP here; it stamps
+each resource with the sender's k8s.pod.ip (k8sattributes passthrough: no Kubernetes
+API access) and forwards to the central Alloy (otel.upstreamEndpoint), which does the
+Kubernetes tagging by that IP and writes to Tempo/Prometheus/Loki. One path per signal.
+*/ -}}
+{{- $o := .Values.otel -}}
+{{- if $o.enabled -}}
+{{- $c := $o.collector -}}
+{{- $name := include "travel-agent.componentName" (dict "root" . "component" "alloy") -}}
+{{- $ctx := dict "root" . "component" "alloy" -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alloy
+data:
+  config.alloy: |
+    {{- include "travel-agent.alloyConfig" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alloy
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "travel-agent.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "travel-agent.labels" . | nindent 8 }}
+        app.kubernetes.io/component: alloy
+      annotations:
+        # Rolls the pod whenever the rendered config changes.
+        checksum/config: {{ include "travel-agent.alloyConfig" . | sha256sum }}
+    spec:
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 473 # "alloy" in the image
+        runAsGroup: 473
+        fsGroup: 473
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alloy
+          image: "{{ $c.image.repository }}:{{ $c.image.tag }}"
+          imagePullPolicy: {{ $c.image.pullPolicy }}
+          args:
+            - run
+            # otelcol.connector.signaltometrics (the token rule) is experimental in
+            # Alloy 1.21. Only this release's collector runs with the flag.
+            - --stability.level=experimental
+            - --storage.path=/var/lib/alloy
+            - --server.http.listen-addr=0.0.0.0:12345
+            - /etc/alloy/config.alloy
+          ports:
+            - name: otlp-http
+              containerPort: 4318
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: http-metrics
+              containerPort: 12345
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: http-metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /-/ready
+              port: http-metrics
+            periodSeconds: 20
+          {{- with $c.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: storage
+              mountPath: /var/lib/alloy
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: {{ $name }}
+        - name: storage
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alloy
+spec:
+  selector:
+    {{- include "travel-agent.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+    - name: http-metrics
+      port: 12345
+      targetPort: http-metrics
+{{- if $c.serviceMonitor.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "travel-agent.labels" . | nindent 4 }}
+    app.kubernetes.io/component: alloy
+spec:
+  selector:
+    matchLabels:
+      {{- include "travel-agent.selectorLabels" $ctx | nindent 6 }}
+  endpoints:
+    - port: http-metrics
+{{- end }}
+{{- end }}
+
+{{- define "travel-agent.alloyConfig" -}}
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+otelcol.receiver.otlp "apps" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    traces  = [otelcol.processor.k8sattributes.ip.input]
+    metrics = [otelcol.processor.k8sattributes.ip.input]
+  }
+}
+
+// Only adds k8s.pod.ip, from the app's own connection, so the central Alloy can
+// tag telemetry with the real pod rather than this collector's.
+otelcol.processor.k8sattributes "ip" {
+  passthrough = true
+  output {
+    traces  = [otelcol.processor.transform.genai.input]
+    metrics = [otelcol.processor.batch.out.input]
+  }
+}
+
+// One provider label for every backend. The Anthropic SDKs set gen_ai.provider.name;
+// Inkeep's AI SDK spans only say gen_ai.system ("anthropic.messages"), so fill it in.
+// Extend the map when a provider is added (e.g. the AWS SDK's Bedrock spans).
+otelcol.processor.transform "genai" {
+  error_mode = "ignore"
+  trace_statements {
+    context    = "span"
+    statements = [
+      `set(attributes["gen_ai.provider.name"], "anthropic") where attributes["gen_ai.provider.name"] == nil and IsMatch(attributes["gen_ai.system"], "^anthropic")`,
+    ]
+  }
+  output {
+    traces = [otelcol.processor.batch.out.input]
+  }
+}
+
+otelcol.processor.batch "out" {
+  output {
+    // Tokens are derived here, before any future tail sampling, so they see every span.
+    traces  = [otelcol.connector.signaltometrics.tokens.input, otelcol.exporter.otlphttp.central.input]
+    metrics = [otelcol.exporter.otlphttp.central.input]
+  }
+}
+
+// travel_agent.llm.tokens: one definition for every backend. Each LLM call has
+// exactly one usage-bearing span, and its gen_ai.usage.input_tokens already
+// includes cache reads and writes, so the values are summed as they are:
+//   - the Anthropic SDKs' own spans (LangGraph: com.anthropic.sdk.typescript[.<platform>],
+//     Parlant: com.anthropic.sdk.python); count_tokens spans carry no gen_ai.usage.*;
+//   - Inkeep's AI SDK spans, scope "ai", only the per-call doStream/doGenerate span.
+// Add a condition per new source (e.g. the AWS SDK's Bedrock spans).
+otelcol.connector.signaltometrics "tokens" {
+  spans {
+    name        = "travel_agent.llm.tokens"
+    description = "LLM tokens by backend and model; input includes cache reads and writes"
+    unit        = "{token}"
+    conditions  = [
+      `IsMatch(instrumentation_scope.name, "^com\\.anthropic\\.sdk\\.") and attributes["gen_ai.usage.input_tokens"] != nil`,
+      `instrumentation_scope.name == "ai" and IsMatch(name, "^ai\\..+\\.do(Stream|Generate)$") and attributes["gen_ai.usage.input_tokens"] != nil`,
+    ]
+    attributes {
+      key           = "gen_ai.token.type"
+      default_value = "input"
+    }
+    attributes {
+      key      = "gen_ai.response.model"
+      optional = true
+    }
+    attributes {
+      key      = "gen_ai.provider.name"
+      optional = true
+    }
+    include_resource_attributes { key = "service.name" }
+    include_resource_attributes { key = "service.namespace" }
+    include_resource_attributes { key = "deployment.environment.name" }
+    sum {
+      value = `attributes["gen_ai.usage.input_tokens"]`
+    }
+  }
+  spans {
+    name        = "travel_agent.llm.tokens"
+    description = "LLM tokens by backend and model; input includes cache reads and writes"
+    unit        = "{token}"
+    conditions  = [
+      `IsMatch(instrumentation_scope.name, "^com\\.anthropic\\.sdk\\.") and attributes["gen_ai.usage.output_tokens"] != nil`,
+      `instrumentation_scope.name == "ai" and IsMatch(name, "^ai\\..+\\.do(Stream|Generate)$") and attributes["gen_ai.usage.output_tokens"] != nil`,
+    ]
+    attributes {
+      key           = "gen_ai.token.type"
+      default_value = "output"
+    }
+    attributes {
+      key      = "gen_ai.response.model"
+      optional = true
+    }
+    attributes {
+      key      = "gen_ai.provider.name"
+      optional = true
+    }
+    include_resource_attributes { key = "service.name" }
+    include_resource_attributes { key = "service.namespace" }
+    include_resource_attributes { key = "deployment.environment.name" }
+    sum {
+      value = `attributes["gen_ai.usage.output_tokens"]`
+    }
+  }
+  output {
+    metrics = [otelcol.processor.deltatocumulative.tokens.input]
+  }
+}
+
+// The connector emits a delta per batch; keep one cumulative series per label set
+// and send it every 15 s, like the apps' own metrics.
+otelcol.processor.deltatocumulative "tokens" {
+  output {
+    metrics = [otelcol.processor.interval.tokens.input]
+  }
+}
+
+otelcol.processor.interval "tokens" {
+  interval = "15s"
+  output {
+    metrics = [otelcol.exporter.otlphttp.central.input]
+  }
+}
+
+otelcol.exporter.otlphttp "central" {
+  client {
+    endpoint = {{ .Values.otel.upstreamEndpoint | quote }}
+  }
+}
+{{- end -}}

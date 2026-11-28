@@ -94,6 +94,50 @@ postgres:
 # Which agent backend serves chat: inkeep (the Inkeep run API, below), parlant
 # (the in-chart Parlant service, below) or langgraph (the in-chart LangGraph service, below). Sets CHAT_BACKEND on the API; the web app
 # reads it from /api/config and picks the matching chat engine.
+# The "Travel agent: cost by backend" dashboard, as a ConfigMap that Grafana's dashboard
+# sidecar loads (label grafana_dashboard, any namespace). Enable it on one release only
+# (the homelab prod values do): the dashboard picks the environment itself.
+grafana:
+  dashboard:
+    enabled: false
+    folder: Travel agent
+
+# OpenTelemetry for api, langgraph (Node preload: auto-instrumentation plus
+# @fastify/otel) and parlant (its built-in tracer and meter). Off by default:
+# with it off the Node preload loads no SDK and Parlant keeps its local tracer.
+# The homelab values turn it on with the Alloy endpoint.
+otel:
+  enabled: false
+  # The central collector this release's own Alloy forwards to (OTLP/HTTP base URL),
+  # e.g. http://alloy.monitoring.svc.cluster.local:4318. Apps never talk to it directly:
+  # they export to <release>-alloy (templates/alloy.yaml), which stamps k8s.pod.ip for
+  # the central Alloy's k8sattributes and, later, derives the LLM token metric.
+  upstreamEndpoint: ''
+  # prod | dev. Also picks service.namespace (travel-agent | travel-agent-dev),
+  # which becomes Prometheus' job prefix, so dev and prod series stay apart.
+  environment: prod
+  # Lever if Tempo or CPU is stressed: parentbased_traceidratio (with
+  # OTEL_TRACES_SAMPLER_ARG in <component>.env). Sampling belongs in the collector
+  # long term, after the token rule.
+  tracesSampler: parentbased_always_on
+  metricExportIntervalMs: 15000
+  # This release's Alloy. One replica, Recreate on updates: the token series it will
+  # derive carry no instance label, so two overlapping pods would double-write them.
+  collector:
+    image:
+      repository: grafana/alloy
+      tag: v1.21.3 # same version as the central Alloy
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 25m
+        memory: 128Mi
+      limits:
+        memory: 512Mi
+    # A ServiceMonitor for Alloy's own metrics (needs the monitoring.coreos.com CRDs).
+    serviceMonitor:
+      enabled: false
+
 chat:
   backend: inkeep
 

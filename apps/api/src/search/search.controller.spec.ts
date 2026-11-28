@@ -40,9 +40,9 @@ async function app(env: Record<string, string>, provider: SearchProvider) {
 const stub: SearchProvider = {
   enabled: true,
   search: () =>
-    Promise.resolve([
-      { title: 'A', url: 'https://example.com/a', snippet: 'a' },
-    ]),
+    Promise.resolve({
+      results: [{ title: 'A', url: 'https://example.com/a', snippet: 'a' }],
+    }),
 };
 
 describe('POST /api/search/web', () => {
@@ -72,6 +72,31 @@ describe('POST /api/search/web', () => {
     const res = await post({ query: 'Lisbon events' }, `Bearer ${TOKEN}`);
     expect(res.statusCode).toBe(200);
     expect(WebSearchResponseSchema.parse(res.json()).results).toHaveLength(1);
+  });
+
+  it('tags the search with x-search-client, or unknown', async () => {
+    const search = vi.fn<SearchProvider['search']>((req, signal) =>
+      stub.search(req, signal),
+    );
+    a = await app({ SEARCH_API_TOKEN: TOKEN }, { enabled: true, search });
+    const send = (query: string, client?: string) =>
+      a!.inject({
+        method: 'POST',
+        url: '/api/search/web',
+        headers: {
+          authorization: `Bearer ${TOKEN}`,
+          ...(client ? { 'x-search-client': client } : {}),
+        },
+        payload: { query },
+      });
+    await send('Lisbon one', 'langgraph');
+    await send('Lisbon two');
+    await send('Lisbon three', 'bogus');
+    expect(search.mock.calls.map(([req]) => req.projectId)).toEqual([
+      'travel-agent-langgraph',
+      'travel-agent-unknown',
+      'travel-agent-unknown',
+    ]);
   });
 
   it('rejects a missing or wrong token with 401', async () => {

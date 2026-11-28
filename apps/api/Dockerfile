@@ -42,4 +42,4 @@ COPY --from=build /repo/apps/api/drizzle apps/api/drizzle
 USER node
 WORKDIR /repo/apps/api
 EXPOSE 3000
-CMD ["node", "dist/main.js"]
+CMD ["node", "--import", "./dist/instrumentation.js", "dist/main.js"]

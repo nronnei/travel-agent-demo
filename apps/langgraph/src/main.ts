@@ -4,6 +4,7 @@ import { createCheckpointer } from './checkpointer.js';
 import { loadConfig } from './config.js';
 import { buildGraph } from './graph.js';
 import { buildServer } from './server.js';
+import { flushTelemetry } from './telemetry.js';
 
 const config = loadConfig();
 
@@ -41,11 +42,13 @@ if (!config.INTAKE_API_TOKEN) app.log.warn('INTAKE_API_TOKEN is not set');
 
 await app.listen({ host: '0.0.0.0', port: config.PORT });
 
-// Close the server, then the database pool, when Kubernetes stops the pod.
+// Close the server, then the database pool, then send the last telemetry
+// batch, when Kubernetes stops the pod.
 for (const signal of ['SIGTERM', 'SIGINT'] as const)
   process.once(signal, () => {
     void app
       .close()
       .then(() => checkpointer.close())
+      .then(() => flushTelemetry())
       .finally(() => process.exit(0));
   });

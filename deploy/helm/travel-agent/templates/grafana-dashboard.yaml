@@ -1,0 +1,23 @@
+{{- /*
+The cost dashboard (dashboards/travel-agent-costs.json) as a ConfigMap that
+Grafana's dashboard sidecar picks up from any namespace (label grafana_dashboard).
+Turn it on for one release only: the dashboard's uid is fixed, and its "ns"
+variable already covers every environment.
+*/ -}}
+{{- with .Values.grafana.dashboard }}
+{{- if .enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "travel-agent.fullname" $ }}-dashboard
+  labels:
+    {{- include "travel-agent.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: dashboard
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: {{ .folder | quote }}
+data:
+  travel-agent-costs.json: |-
+    {{- $.Files.Get "dashboards/travel-agent-costs.json" | nindent 4 }}
+{{- end }}
+{{- end }}

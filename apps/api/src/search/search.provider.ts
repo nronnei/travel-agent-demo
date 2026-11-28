@@ -3,13 +3,23 @@ import type { WebSearchRequest, WebSearchResult } from '@travel-agent/shared';
 
 /** A validated request: defaults applied, `recencyDays` still optional. */
 export type ProviderRequest = Required<Omit<WebSearchRequest, 'recencyDays'>> &
-  Pick<WebSearchRequest, 'recencyDays'>;
+  Pick<WebSearchRequest, 'recencyDays'> & {
+    /** Usage-grouping label at the provider (Tavily `X-Project-ID`). */
+    projectId?: string;
+  };
+
+/** What a provider returns: the results, plus the credits billed if it says. */
+export interface ProviderResult {
+  results: WebSearchResult[];
+  /** Provider-reported cost of this call. Absent when the provider doesn't say. */
+  credits?: number;
+}
 
 /** A web search backend. Switching providers is one new implementation. */
 export interface SearchProvider {
   /** `false` for the `off` provider: the service rejects before counting limits. */
   readonly enabled: boolean;
-  search(req: ProviderRequest, signal: AbortSignal): Promise<WebSearchResult[]>;
+  search(req: ProviderRequest, signal: AbortSignal): Promise<ProviderResult>;
 }
 
 /** Injection token for the configured provider. Specs override it with a stub. */

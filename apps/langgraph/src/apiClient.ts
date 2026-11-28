@@ -1,6 +1,7 @@
 import {
   IntakeContextSchema,
   IntakeHeader,
+  SEARCH_CLIENT_HEADER,
   WebSearchResponseSchema,
   type IntakeContext,
   type TripBriefProps,
@@ -73,6 +74,7 @@ export class SearchClient {
       headers: {
         'content-type': 'application/json',
         authorization: `Bearer ${this.token}`,
+        [SEARCH_CLIENT_HEADER]: 'langgraph',
       },
       body: JSON.stringify(args),
       signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS),

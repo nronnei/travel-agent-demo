@@ -19,11 +19,18 @@
 #
 # Web search is the dev kill switch: `tilt args -- --search-provider=off` makes
 # every search return 503, so both agents answer without it (default: tavily).
+#
+# OpenTelemetry export is on by default, labelled service.namespace=travel-agent-dev,
+# through the namespace's own Alloy to the cluster's collector
+# (`--otel-upstream=<url>`, default http://alloy.monitoring.svc.cluster.local:4318);
+# turn it off with `--otel=off`. What the cluster needs: docs/observability.md.
 load('ext://namespace', 'namespace_create')
 load('ext://restart_process', 'docker_build_with_restart')
 
 config.define_string('chat-backend', usage='inkeep (default), parlant or langgraph')
 config.define_string('search-provider', usage='tavily (default) or off')
+config.define_string('otel', usage='on (default) or off: OpenTelemetry export (see docs/observability.md)')
+config.define_string('otel-upstream', usage='OTLP/HTTP URL of the cluster collector the namespace forwards to')
 CFG = config.parse()
 CHAT_BACKEND = CFG.get('chat-backend', 'inkeep')
 if CHAT_BACKEND not in ['inkeep', 'parlant', 'langgraph']:
@@ -34,6 +41,11 @@ LANGGRAPH = CHAT_BACKEND == 'langgraph'
 SEARCH_PROVIDER = CFG.get('search-provider', 'tavily')
 if SEARCH_PROVIDER not in ['tavily', 'off']:
     fail('--search-provider must be tavily or off, not %s' % SEARCH_PROVIDER)
+OTEL = CFG.get('otel', 'on')
+if OTEL not in ['on', 'off']:
+    fail('--otel must be on or off, not %s' % OTEL)
+# The cluster's own collector, which the namespace's Alloy forwards to (docs/observability.md).
+OTEL_ENDPOINT = CFG.get('otel-upstream', 'http://alloy.monitoring.svc.cluster.local:4318')
 
 allow_k8s_contexts('default')
 
@@ -69,6 +81,8 @@ BACKEND_COMPONENTS = {
     'langgraph': ['langgraph'],
 }
 STALE = [c for b, cs in BACKEND_COMPONENTS.items() if b != CHAT_BACKEND for c in cs]
+if OTEL != 'on':
+    STALE.append('alloy')  # the namespace's collector, when OTEL is off
 local(("kubectl -n %s delete deployment,statefulset,service --ignore-not-found --wait=false " +
        "-l 'app.kubernetes.io/instance=travel-agent,app.kubernetes.io/component in (%s)'")
       % (NAMESPACE, ','.join(STALE)), quiet=True)
@@ -148,6 +162,10 @@ helm_set = [
     'parlant.image.repository=' + PARLANT_IMAGE,
     'langgraph.image.repository=' + LANGGRAPH_IMAGE,
     'api.env.SEARCH_PROVIDER=' + SEARCH_PROVIDER,
+    # Always set, so the homelab (prod) values never leak prod labels into dev.
+    'otel.enabled=' + str(OTEL == 'on').lower(),
+    'otel.upstreamEndpoint=' + OTEL_ENDPOINT,
+    'otel.environment=dev',
 ]
 api_secret = dev_secret('travel-agent-api-dev',
                         ['INTAKE_API_TOKEN', 'TAVILY_API_KEY', 'SEARCH_API_TOKEN',
@@ -310,6 +328,9 @@ if INKEEP:
                    resource_deps=['travel-agent-inkeep-api', 'travel-agent-api'])
 else:
     idle_volumes += db_objects('inkeep') + db_objects('spicedb')
+if OTEL == 'on':
+    # This namespace's own collector: apps export to it, it forwards to the central Alloy.
+    k8s_resource('travel-agent-alloy', labels=['infra'], objects=['travel-agent-alloy:configmap'])
 k8s_resource(new_name='travel-agent-infra', labels=['infra'],
              objects=['%s:namespace' % NAMESPACE, 'travel-agent:ingress', 'travel-agent-db:cluster']
                      + (['travel-agent-db-metrics:podmonitor'] if PODMONITOR else []) + idle_volumes)

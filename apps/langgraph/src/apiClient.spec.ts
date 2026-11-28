@@ -1,4 +1,4 @@
-import { IntakeClient } from './apiClient.js';
+import { IntakeClient, SearchClient } from './apiClient.js';
 
 const context = {
   address: 'Dr Lima',
@@ -52,5 +52,25 @@ describe('IntakeClient', () => {
         new Response('', { status: 500 })) as unknown as typeof fetch,
     );
     await expect(client.context('c')).rejects.toThrow('500');
+  });
+});
+
+describe('SearchClient', () => {
+  it('sends the search token and names itself in x-search-client', async () => {
+    const fetchFn = vi.fn(async () =>
+      Response.json({ query: 'q', searchedAt: '2027-06-01T00:00:00Z', results: [] }),
+    );
+    const client = new SearchClient(
+      'http://api:3000',
+      'search-token',
+      fetchFn as unknown as typeof fetch,
+    );
+    await client.search({ query: 'Lisbon events', maxResults: 5 });
+    const [url, init] = fetchFn.mock.calls[0] as unknown as [URL, RequestInit];
+    expect(String(url)).toBe('http://api:3000/api/search/web');
+    expect(init.headers).toMatchObject({
+      authorization: 'Bearer search-token',
+      'x-search-client': 'langgraph',
+    });
   });
 });

@@ -25,9 +25,11 @@ describe('MCP /api/mcp (e2e)', () => {
   const provider = {
     enabled: true,
     search: vi.fn<SearchProvider['search']>(() =>
-      Promise.resolve([
-        { title: 'Festas', url: 'https://example.com/festas', snippet: 'June' },
-      ]),
+      Promise.resolve({
+        results: [
+          { title: 'Festas', url: 'https://example.com/festas', snippet: 'June' },
+        ],
+      }),
     ),
   };
 
@@ -54,13 +56,15 @@ describe('MCP /api/mcp (e2e)', () => {
     vi.restoreAllMocks();
   });
 
-  async function connect(token?: string) {
+  async function connect(token?: string, headers: Record<string, string> = {}) {
     const client = new Client({ name: 'e2e', version: '0.0.0' });
     await client.connect(
       new StreamableHTTPClientTransport(url, {
-        requestInit: token
-          ? { headers: { authorization: `Bearer ${token}` } }
-          : {},
+        requestInit: {
+          headers: token
+            ? { ...headers, authorization: `Bearer ${token}` }
+            : headers,
+        },
       }),
     );
     return client;
@@ -86,7 +90,30 @@ describe('MCP /api/mcp (e2e)', () => {
     const response = WebSearchResponseSchema.parse(JSON.parse(content.text));
     expect(response.results[0].url).toBe('https://example.com/festas');
     expect(provider.search).toHaveBeenCalledWith(
-      { query: 'Lisbon events June 2027', maxResults: 5 },
+      {
+        query: 'Lisbon events June 2027',
+        maxResults: 5,
+        projectId: 'travel-agent-inkeep',
+      },
+      expect.any(AbortSignal),
+    );
+    await client.close();
+  });
+
+  it.each([
+    ['no header', {}, 'inkeep'],
+    ['an invalid header', { 'x-search-client': 'someone-else' }, 'inkeep'],
+    ['x-search-client: parlant', { 'x-search-client': 'parlant' }, 'parlant'],
+  ])('tags the search by caller with %s', async (_, headers, expected) => {
+    provider.search.mockClear();
+    const client = await connect(TOKEN, headers);
+    // A unique query per case, so the per-client cache can't answer it.
+    await client.callTool({
+      name: 'web_search',
+      arguments: { query: `Porto events ${expected} ${_}` },
+    });
+    expect(provider.search).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: `travel-agent-${expected}` }),
       expect.any(AbortSignal),
     );
     await client.close();

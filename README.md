@@ -140,6 +140,15 @@ the homelab values plus `values-dev.yaml`. Edits under `src/` sync into the runn
 and hot-reload. Changes to `package.json` or the lockfile trigger a full image rebuild.
 `tilt down` only removes the dev deployment.
 
+Pick the chat backend with `tilt up -- --chat-backend=inkeep|parlant|langgraph` (default
+`inkeep`); only that one is deployed, and the others' workloads are removed while their
+data stays. Inkeep runs from its published images with its own databases in the dev
+cluster, and its manage UI is on `localhost:3003`. OpenTelemetry export is on by default,
+to your cluster's collector (`--otel-upstream=<url>`; `--otel=off` turns it off).
+`docs/observability.md` lists what the cluster needs, and **Cost** in
+`docs/agent-frameworks.md` covers the cost dashboard. Set `HOMELAB_DIR` when running Tilt
+from a git worktree.
+
 **Release-style deploy:**
 
 ```sh

@@ -11,6 +11,7 @@ import {
   offProvider,
   type SearchProvider,
 } from './search.provider.js';
+import { SearchMetrics } from './search.metrics.js';
 import { SearchLimitedException, SearchService } from './search.service.js';
 import { TAVILY_URL, TavilyProvider, trimSnippet } from './tavily.provider.js';
 
@@ -21,12 +22,26 @@ const results: WebSearchResult[] = [
 ];
 
 function stub(impl?: SearchProvider['search']) {
-  const search = vi.fn(impl ?? (() => Promise.resolve(results)));
+  const search = vi.fn<SearchProvider['search']>(
+    impl ?? (() => Promise.resolve({ results, credits: 1 })),
+  );
   return { enabled: true, search } satisfies SearchProvider;
 }
 
-function service(provider: SearchProvider, env: Record<string, string> = {}) {
-  return new SearchService(provider, new ConfigService(env));
+function fakeMetrics() {
+  return { request: vi.fn(), credits: vi.fn() };
+}
+
+function service(
+  provider: SearchProvider,
+  env: Record<string, string> = {},
+  metrics = fakeMetrics(),
+) {
+  return new SearchService(
+    provider,
+    new ConfigService(env),
+    metrics as unknown as SearchMetrics,
+  );
 }
 
 /** Everything logged through Nest's Logger, as one string per call. */
@@ -60,21 +75,96 @@ describe('SearchService', () => {
   it('returns the provider results with the query and a timestamp', async () => {
     captureLogs();
     const provider = stub();
-    const res = await service(provider).search({ query: '  Lisbon events ' });
+    const res = await service(provider).search({ query: '  Lisbon events ' }, 'parlant');
     expect(res).toMatchObject({ query: 'Lisbon events', results });
     expect(new Date(res.searchedAt).toString()).not.toBe('Invalid Date');
     expect(provider.search).toHaveBeenCalledWith(
-      { query: 'Lisbon events', maxResults: 5 },
+      {
+        query: 'Lisbon events',
+        maxResults: 5,
+        projectId: 'travel-agent-parlant',
+      },
       expect.any(AbortSignal),
     );
   });
 
+  it('tags the provider call with a per-client project ID', async () => {
+    captureLogs();
+    const provider = stub();
+    await service(provider, { TAVILY_PROJECT_PREFIX: 'ta' }).search(
+      { query: 'Lisbon events' },
+      'langgraph',
+    );
+    expect(provider.search.mock.calls[0][0].projectId).toBe('ta-langgraph');
+  });
+
+  it('keeps a separate cache per client', async () => {
+    captureLogs();
+    const provider = stub();
+    const s = service(provider);
+    await s.search({ query: 'Lisbon events' }, 'parlant');
+    await s.search({ query: 'Lisbon events' }, 'langgraph');
+    await s.search({ query: 'Lisbon events' }, 'parlant');
+    expect(provider.search).toHaveBeenCalledTimes(2);
+  });
+
+  it('counts each outcome once, and credits only on ok', async () => {
+    vi.useFakeTimers();
+    captureLogs();
+    const metrics = fakeMetrics();
+    const s = service(stub(), { SEARCH_RATE_PER_MINUTE: '2' }, metrics);
+    await s.search({ query: 'one query' }, 'parlant'); // ok
+    await s.search({ query: 'one query' }, 'parlant'); // cached
+    await s.search({ query: 'two query' }, 'parlant'); // ok
+    await s.search({ query: 'three query' }, 'parlant').catch(() => {}); // limited
+    await s.search({ query: 'x' }, 'parlant').catch(() => {}); // 400: not counted
+    expect(metrics.request.mock.calls).toEqual([
+      ['parlant', 'ok'],
+      ['parlant', 'cached'],
+      ['parlant', 'ok'],
+      ['parlant', 'limited'],
+    ]);
+    expect(metrics.credits.mock.calls).toEqual([
+      ['parlant', 1],
+      ['parlant', 1],
+    ]);
+
+    const errMetrics = fakeMetrics();
+    await service(
+      stub(() => Promise.reject(new ProviderError(500))),
+      {},
+      errMetrics,
+    )
+      .search({ query: 'boom query' }, 'inkeep')
+      .catch(() => {});
+    await service(offProvider, {}, errMetrics)
+      .search({ query: 'off query' }, 'inkeep')
+      .catch(() => {});
+    expect(errMetrics.request.mock.calls).toEqual([
+      ['inkeep', 'error'],
+      ['inkeep', 'off'],
+    ]);
+    expect(errMetrics.credits).not.toHaveBeenCalled();
+  });
+
+  it('omits credits when the provider reports none', async () => {
+    const logs = captureLogs();
+    const metrics = fakeMetrics();
+    await service(
+      stub(() => Promise.resolve({ results })),
+      {},
+      metrics,
+    ).search({ query: QUERY }, 'parlant');
+    expect(metrics.credits).not.toHaveBeenCalled();
+    expect(logs[0].text).not.toContain('credits=');
+  });
+
   it('rejects invalid requests with 400', async () => {
-    await expect(service(stub()).search({ query: 'x' })).rejects.toMatchObject({
+    await expect(service(stub()).search({ query: 'x' }, 'parlant')).rejects.toMatchObject({
       status: 400,
     });
     await expect(
-      service(stub()).search({ query: 'Lisbon', maxResults: 9 }),
+      service(stub()).search({ query: 'Lisbon', maxResults: 9 }, 'parlant'),
     ).rejects.toMatchObject({ status: 400 });
   });
 
@@ -84,17 +174,17 @@ describe('SearchService', () => {
     const provider = stub();
     const s = service(provider, { SEARCH_CACHE_TTL_SECONDS: '60' });
 
-    await s.search({ query: 'Lisbon events' });
-    await s.search({ query: 'LISBON   events' });
+    await s.search({ query: 'Lisbon events' }, 'parlant');
+    await s.search({ query: 'LISBON   events' }, 'parlant');
     expect(provider.search).toHaveBeenCalledTimes(1);
     expect(logs.some((l) => l.text.startsWith('search cached'))).toBe(true);
 
     // Different options are a different key.
-    await s.search({ query: 'Lisbon events', maxResults: 3 });
+    await s.search({ query: 'Lisbon events', maxResults: 3 }, 'parlant');
     expect(provider.search).toHaveBeenCalledTimes(2);
 
     vi.advanceTimersByTime(61_000);
-    await s.search({ query: 'Lisbon events' });
+    await s.search({ query: 'Lisbon events' }, 'parlant');
     expect(provider.search).toHaveBeenCalledTimes(3);
   });
 
@@ -103,9 +193,9 @@ describe('SearchService', () => {
     const logs = captureLogs();
     const s = service(stub(), { SEARCH_RATE_PER_MINUTE: '2' });
 
-    await s.search({ query: 'one query' });
-    await s.search({ query: 'two query' });
-    const err = await s.search({ query: 'three query' }).catch((e) => e);
+    await s.search({ query: 'one query' }, 'parlant');
+    await s.search({ query: 'two query' }, 'parlant');
+    const err = await s.search({ query: 'three query' }, 'parlant').catch((e) => e);
     expect(err).toBeInstanceOf(SearchLimitedException);
     expect(err.getStatus()).toBe(429);
     expect(err.reason).toBe('rate');
@@ -115,7 +205,7 @@ describe('SearchService', () => {
     });
 
     vi.advanceTimersByTime(30_000);
-    await expect(s.search({ query: 'four query' })).resolves.toBeDefined();
+    await expect(s.search({ query: 'four query' }, 'parlant')).resolves.toBeDefined();
   });
 
   it('enforces the daily cap until UTC midnight', async () => {
@@ -124,18 +214,18 @@ describe('SearchService', () => {
     const logs = captureLogs();
     const s = service(stub(), { SEARCH_DAILY_LIMIT: '1' });
 
-    await s.search({ query: 'one query' });
-    const err = await s.search({ query: 'two query' }).catch((e) => e);
+    await s.search({ query: 'one query' }, 'parlant');
+    const err = await s.search({ query: 'two query' }, 'parlant').catch((e) => e);
     expect(err.reason).toBe('daily');
     expect(logs).toContainEqual({
       level: 'warn',
       text: expect.stringMatching(/^search limited reason=daily /),
     });
     // Cached queries are still served over the cap.
-    await expect(s.search({ query: 'one query' })).resolves.toBeDefined();
+    await expect(s.search({ query: 'one query' }, 'parlant')).resolves.toBeDefined();
 
     vi.setSystemTime(new Date('2027-06-02T00:00:01Z'));
-    await expect(s.search({ query: 'two query' })).resolves.toBeDefined();
+    await expect(s.search({ query: 'two query' }, 'parlant')).resolves.toBeDefined();
   });
 
   it('maps a provider timeout to 503', async () => {
@@ -151,7 +241,7 @@ describe('SearchService', () => {
     vi.spyOn(AbortSignal, 'timeout').mockImplementation(() =>
       AbortSignal.abort(new DOMException('timed out', 'TimeoutError')),
     );
-    await expect(service(provider).search({ query: QUERY })).rejects.toThrow(
+    await expect(service(provider).search({ query: QUERY }, 'parlant')).rejects.toThrow(
       ServiceUnavailableException,
     );
     expect(logs).toContainEqual({
@@ -164,17 +254,17 @@ describe('SearchService', () => {
     captureLogs();
     const s = service(offProvider, { SEARCH_RATE_PER_MINUTE: '1' });
     for (let i = 0; i < 3; i++)
-      await expect(s.search({ query: QUERY })).rejects.toThrow(
+      await expect(s.search({ query: QUERY }, 'parlant')).rejects.toThrow(
         ServiceUnavailableException,
       );
   });
 
   it('logs a hash and length, never the raw query', async () => {
     const logs = captureLogs();
-    await service(stub()).search({ query: QUERY });
+    await service(stub()).search({ query: QUERY }, 'parlant');
     expect(logs).toHaveLength(1);
     expect(logs[0].text).toMatch(
-      /^search ok len=\d+ q=[0-9a-f]{8} results=1 ms=\d+$/,
+      /^search ok client=parlant len=\d+ q=[0-9a-f]{8} results=1 credits=1 ms=\d+$/,
     );
     expect(logs[0].text).not.toContain('Lisbon');
     expect(logs[0].text).not.toContain('Lovelace');
@@ -188,7 +278,7 @@ describe('SearchService', () => {
       vi.fn(() => Promise.resolve(new Response(body, { status: 401 }))),
     );
     const err = await rejection<HttpException>(
-      service(new TavilyProvider(API_KEY)).search({ query: QUERY }),
+      service(new TavilyProvider(API_KEY)).search({ query: QUERY }, 'parlant'),
     );
 
     expect(err).toBeInstanceOf(ServiceUnavailableException);
@@ -232,8 +322,33 @@ describe('TavilyProvider', () => {
       include_answer: false,
       include_raw_content: false,
       include_published_date: true,
+      include_usage: true,
     });
   });
+
+  it('sends the project ID header and parses usage credits', async () => {
+    const f = mockFetch({ results: [], usage: { credits: 2 } });
+    const out = await new TavilyProvider(API_KEY).search(
+      { query: 'Lisbon events', maxResults: 5, projectId: 'travel-agent-parlant' },
+      new AbortController().signal,
+    );
+    expect(f.mock.calls[0][1].headers).toMatchObject({
+      'x-project-id': 'travel-agent-parlant',
+    });
+    expect(out.credits).toBe(2);
+  });
+
+  it.each([[undefined], [{}], [{ credits: 'two' }], [{ credits: -1 }]])(
+    'ignores missing or malformed usage %j',
+    async (usage) => {
+      mockFetch({ results: [], usage });
+      const out = await new TavilyProvider(API_KEY).search(
+        { query: 'Lisbon events', maxResults: 5 },
+        new AbortController().signal,
+      );
+      expect(out).not.toHaveProperty('credits');
+    },
+  );
 
   it('maps recencyDays to start_date', async () => {
     const f = mockFetch({ results: [] });
@@ -272,15 +387,15 @@ describe('TavilyProvider', () => {
       { query: 'Lisbon', maxResults: 5 },
       new AbortController().signal,
     );
-    expect(out).toHaveLength(2);
-    expect(out[0]).toMatchObject({
+    expect(out.results).toHaveLength(2);
+    expect(out.results[0]).toMatchObject({
       title: 'Festas de Lisboa',
       url: 'https://example.com/festas',
       publishedAt: '2025-03-11T17:00:00.000Z',
     });
-    expect(out[0].snippet.length).toBe(600);
-    expect(out[0].snippet).not.toMatch(/\s{2}/);
-    expect(out[1]).toEqual({
+    expect(out.results[0].snippet.length).toBe(600);
+    expect(out.results[0].snippet).not.toMatch(/\s{2}/);
+    expect(out.results[1]).toEqual({
       title: 'https://example.com/b',
       url: 'https://example.com/b',
       snippet: 'b',
