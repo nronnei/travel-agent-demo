@@ -18,46 +18,7 @@ metadata:
     app.kubernetes.io/component: alloy
 data:
   config.alloy: |
-    logging {
-      level  = "info"
-      format = "logfmt"
-    }
-
-    otelcol.receiver.otlp "apps" {
-      grpc {
-        endpoint = "0.0.0.0:4317"
-      }
-      http {
-        endpoint = "0.0.0.0:4318"
-      }
-      output {
-        traces  = [otelcol.processor.k8sattributes.ip.input]
-        metrics = [otelcol.processor.k8sattributes.ip.input]
-      }
-    }
-
-    // Only adds k8s.pod.ip, from the app's own connection, so the central Alloy can
-    // tag telemetry with the real pod rather than this collector's.
-    otelcol.processor.k8sattributes "ip" {
-      passthrough = true
-      output {
-        traces  = [otelcol.processor.batch.out.input]
-        metrics = [otelcol.processor.batch.out.input]
-      }
-    }
-
-    otelcol.processor.batch "out" {
-      output {
-        traces  = [otelcol.exporter.otlphttp.central.input]
-        metrics = [otelcol.exporter.otlphttp.central.input]
-      }
-    }
-
-    otelcol.exporter.otlphttp "central" {
-      client {
-        endpoint = {{ $o.upstreamEndpoint | quote }}
-      }
-    }
+    {{- include "travel-agent.alloyConfig" . | nindent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -79,7 +40,8 @@ spec:
         {{- include "travel-agent.labels" . | nindent 8 }}
         app.kubernetes.io/component: alloy
       annotations:
-        checksum/config: {{ printf "%s" $o | sha256sum }}
+        # Rolls the pod whenever the rendered config changes.
+        checksum/config: {{ include "travel-agent.alloyConfig" . | sha256sum }}
     spec:
       {{- with .Values.nodeSelector }}
       nodeSelector:
@@ -98,6 +60,9 @@ spec:
           imagePullPolicy: {{ $c.image.pullPolicy }}
           args:
             - run
+            # otelcol.connector.signaltometrics (the token rule) is experimental in
+            # Alloy 1.21. Only this release's collector runs with the flag.
+            - --stability.level=experimental
             - --storage.path=/var/lib/alloy
             - --server.http.listen-addr=0.0.0.0:12345
             - /etc/alloy/config.alloy
@@ -181,3 +146,129 @@ spec:
     - port: http-metrics
 {{- end }}
 {{- end }}
+
+{{- define "travel-agent.alloyConfig" -}}
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+otelcol.receiver.otlp "apps" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    traces  = [otelcol.processor.k8sattributes.ip.input]
+    metrics = [otelcol.processor.k8sattributes.ip.input]
+  }
+}
+
+// Only adds k8s.pod.ip, from the app's own connection, so the central Alloy can
+// tag telemetry with the real pod rather than this collector's.
+otelcol.processor.k8sattributes "ip" {
+  passthrough = true
+  output {
+    traces  = [otelcol.processor.batch.out.input]
+    metrics = [otelcol.processor.batch.out.input]
+  }
+}
+
+otelcol.processor.batch "out" {
+  output {
+    // Tokens are derived here, before any future tail sampling, so they see every span.
+    traces  = [otelcol.connector.signaltometrics.tokens.input, otelcol.exporter.otlphttp.central.input]
+    metrics = [otelcol.exporter.otlphttp.central.input]
+  }
+}
+
+// travel_agent.llm.tokens: one definition for every backend. Each LLM call has
+// exactly one usage-bearing span, and its gen_ai.usage.input_tokens already
+// includes cache reads and writes, so the values are summed as they are:
+//   - the Anthropic SDKs' own spans (LangGraph: com.anthropic.sdk.typescript[.<platform>],
+//     Parlant: com.anthropic.sdk.python); count_tokens spans carry no gen_ai.usage.*;
+//   - Inkeep's AI SDK spans, scope "ai", only the per-call doStream/doGenerate span.
+// Add a condition per new source (e.g. the AWS SDK's Bedrock spans).
+otelcol.connector.signaltometrics "tokens" {
+  spans {
+    name        = "travel_agent.llm.tokens"
+    description = "LLM tokens by backend and model; input includes cache reads and writes"
+    unit        = "{token}"
+    conditions  = [
+      `IsMatch(instrumentation_scope.name, "^com\\.anthropic\\.sdk\\.") and attributes["gen_ai.usage.input_tokens"] != nil`,
+      `instrumentation_scope.name == "ai" and IsMatch(name, "^ai\\..+\\.do(Stream|Generate)$") and attributes["gen_ai.usage.input_tokens"] != nil`,
+    ]
+    attributes {
+      key           = "gen_ai.token.type"
+      default_value = "input"
+    }
+    attributes {
+      key      = "gen_ai.response.model"
+      optional = true
+    }
+    attributes {
+      key      = "gen_ai.provider.name"
+      optional = true
+    }
+    include_resource_attributes { key = "service.name" }
+    include_resource_attributes { key = "service.namespace" }
+    include_resource_attributes { key = "deployment.environment.name" }
+    sum {
+      value = `attributes["gen_ai.usage.input_tokens"]`
+    }
+  }
+  spans {
+    name        = "travel_agent.llm.tokens"
+    description = "LLM tokens by backend and model; input includes cache reads and writes"
+    unit        = "{token}"
+    conditions  = [
+      `IsMatch(instrumentation_scope.name, "^com\\.anthropic\\.sdk\\.") and attributes["gen_ai.usage.output_tokens"] != nil`,
+      `instrumentation_scope.name == "ai" and IsMatch(name, "^ai\\..+\\.do(Stream|Generate)$") and attributes["gen_ai.usage.output_tokens"] != nil`,
+    ]
+    attributes {
+      key           = "gen_ai.token.type"
+      default_value = "output"
+    }
+    attributes {
+      key      = "gen_ai.response.model"
+      optional = true
+    }
+    attributes {
+      key      = "gen_ai.provider.name"
+      optional = true
+    }
+    include_resource_attributes { key = "service.name" }
+    include_resource_attributes { key = "service.namespace" }
+    include_resource_attributes { key = "deployment.environment.name" }
+    sum {
+      value = `attributes["gen_ai.usage.output_tokens"]`
+    }
+  }
+  output {
+    metrics = [otelcol.processor.deltatocumulative.tokens.input]
+  }
+}
+
+// The connector emits a delta per batch; keep one cumulative series per label set
+// and send it every 15 s, like the apps' own metrics.
+otelcol.processor.deltatocumulative "tokens" {
+  output {
+    metrics = [otelcol.processor.interval.tokens.input]
+  }
+}
+
+otelcol.processor.interval "tokens" {
+  interval = "15s"
+  output {
+    metrics = [otelcol.exporter.otlphttp.central.input]
+  }
+}
+
+otelcol.exporter.otlphttp "central" {
+  client {
+    endpoint = {{ .Values.otel.upstreamEndpoint | quote }}
+  }
+}
+{{- end -}}

@@ -436,7 +436,7 @@ spans {
 
 ### Grafana
 - **LLM tokens (Prometheus):**
-  - `sum by (job, gen_ai_token_type, gen_ai_response_model) (increase(travel_agent_llm_tokens_total{job=~"$ns/.*"}[$__range]))`. Exact metric and label names are recorded in step 8.
+  - `sum by (job, gen_ai_token_type, gen_ai_response_model) (increase(travel_agent_llm_tokens{job=~"$ns/.*"}[$__range]))`. Exact metric and label names are recorded in step 8.
   - Per-backend rows map `job` to `langgraph` / `parlant` / `inkeep`.
 - **Tavily (Prometheus):**
   - credits: `sum by (client) (increase(travel_agent_search_credits_total{job=~"$ns/.*"}[$__range]))`
@@ -602,7 +602,7 @@ spans {
 - **Files:** `templates/alloy.yaml` (the `signaltometrics` blocks per source from step 7, plus `deltatocumulative` and `interval`); a fixture test `deploy/alloy/test/` (recorded span JSON per source, posted to a local `grafana/alloy:v1.21.3` container running the rendered config with a debug exporter; a script asserts the summed values). The rev 13 code is already gone (step 6a).
 - **Verify:**
   - The fixture test passes: one Anthropic TS span (11 input, 100 cache read, 7 cache write, 5 output) gives `input=118, output=5`; a TS span with a platform-suffixed scope (`com.anthropic.sdk.typescript.bedrock`) is counted; the Python and Inkeep fixtures give their recorded totals; a `count_tokens` span, a span with no usage, and a non-LLM span give nothing (A28).
-  - Under Tilt, per backend: `travel_agent_llm_tokens_total{gen_ai_token_type="input"}` for the turn equals the sum of the turn's usage-bearing spans in Tempo (cache included).
+  - Under Tilt, per backend: `travel_agent_llm_tokens{gen_ai_token_type="input"}` for the turn equals the sum of the turn's usage-bearing spans in Tempo (cache included).
   - ⛔ No other token metric reaches Prometheus for these services (no app-side duplicate).
 
 ### 9. Grafana dashboard
@@ -640,7 +640,7 @@ spans {
   4. For each backend, `tilt up -- --chat-backend=<backend>` and ask the Lisbon events question. Check:
      - the LangGraph turn is one connected trace;
      - Parlant and Inkeep traces exist, and whether they join is recorded;
-     - Prometheus has 3 `client` series and 3 backends' `travel_agent_llm_tokens_total` under `travel-agent-dev`, over a range spanning the runs;
+     - Prometheus has 3 `client` series and 3 backends' `travel_agent_llm_tokens` under `travel-agent-dev`, over a range spanning the runs;
      - the dashboard's combined table shows all three.
 
 ## Rollout & rollback
@@ -888,6 +888,13 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
   - Cold start (process start → listening, warm local DB, 7 runs, median): OTEL off 758 ms, on 1,342 ms: **+0.58 s, passes the ≤ 1 s bar**. An explicit allow-list (http, undici, pg, runtime-node, `@fastify/otel`) measured 1,162 ms (+0.40 s); not needed. Every mode, including OTEL off, had occasional ~1 s outliers, so they're environmental.
   - Still to run under Tilt: hot reload, Tempo/Prometheus checks, RSS and p99 bars.
 - **Order (rev 13 note, superseded by rev 14's step 7):** the trace-content checks run once, after every instrumentation is in place, one Tilt session per backend.
+- **Step 7, DB connection failure (2026-11-28):** terminating the `api` and `inkeep` roles' sessions every 0.3 s for 15 s (28 sessions) caused no request failures: the pools replaced idle connections, so nothing failed in flight. Briefly setting `CONNECTION LIMIT 0` on the dev `api` role (then back to -1) made 3 identity requests fail with 500 inside traced requests: the `pg.connect` and `pg-pool.connect` spans carry `too many connections for role "api"`, `db.namespace`, `server.address` and `server.port`, and the exception event says `PostgreSQL error … (code: 53300)`. ⛔ No password or connection string anywhere.
+- **Step 8 (token rule):**
+  - `templates/alloy.yaml`: the `signaltometrics` connector with one `spans` block per token type, each with two OR'd conditions (the Anthropic SDKs' scopes; Inkeep's `ai` scope with a `do(Stream|Generate)` span), labels `gen_ai.token.type` (set by `default_value`), `gen_ai.response.model` and `gen_ai.provider.name` (optional), and only `service.name`/`service.namespace`/`deployment.environment.name` kept from the resource; then `deltatocumulative` and a 15 s `interval`. Alloy runs with `--stability.level=experimental` (this collector only).
+  - **Deviation:** the config moved into a named template, `travel-agent.alloyConfig`, so the pod's `checksum/config` hashes the rendered config. The earlier checksum hashed the `otel` values, so a config-only change wouldn't have rolled the collector.
+  - `deploy/alloy/test/token-rule.sh` (+ `fixtures.py`, `receiver.alloy`, `check.py`): renders the chart's config, runs it in `grafana/alloy` at the chart's pinned version next to a stand-in receiver (debug exporter), posts the fixtures, and checks the sums. Passes: TS 118 + platform-suffixed 10 = 128 input / 7 output, Python 4013 / 88, Inkeep 10311 / 118; `count_tokens`, Inkeep's outer span and a non-LLM span produce nothing. Note: the receiver's debug exporter also needs the experimental flag.
+  - Under Tilt, per backend (2 conversations each, one with a planner turn): `travel_agent_llm_tokens` equals the sum of the rule's spans in Tempo since the collector started, exactly: LangGraph 19,939 / 2,940, Parlant 59,534 / 3,328, Inkeep 63,302 / 1,485 (Inkeep split by model: Haiku for intake, Sonnet for planning). ⛔ No other token metric exists for these services.
+  - **Finding:** the metric lands in Prometheus as `travel_agent_llm_tokens`, **without `_total`**: the connector's sums arrive non-monotonic, so Prometheus doesn't treat them as counters. `increase()` still computes correctly over them; the dashboard queries use the real name. The first-sample loss on a new series (noted in step 7) applies here too.
 - **Step 3's deferred gates and step 7 (2026-11-26, Tilt dev images, one run per backend; the traffic driver and trace scanner are scratch scripts, not committed):**
   - **Performance, LangGraph, 20 conversations each (25 turns, 5 planner turns with searches):**
 

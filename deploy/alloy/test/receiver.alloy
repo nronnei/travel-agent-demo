@@ -1,0 +1,13 @@
+// A stand-in for the central Alloy: prints every metric it receives.
+otelcol.receiver.otlp "in" {
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+  output {
+    metrics = [otelcol.exporter.debug.out.input]
+  }
+}
+
+otelcol.exporter.debug "out" {
+  verbosity = "detailed"
+}
