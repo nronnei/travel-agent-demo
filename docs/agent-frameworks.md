@@ -29,8 +29,9 @@ Inkeep's API to `localhost:3002` and its manage UI to `localhost:3003` (the admi
 login is in `.tilt/inkeep-dev.env`).
 
 Tilt also turns on OpenTelemetry by default: every service exports to the
-namespace's own Alloy collector (`travel-agent-alloy`), which forwards to the
-homelab Alloy. `tilt up -- --otel=off` turns it off. See **Cost** below.
+namespace's own Alloy collector (`travel-agent-alloy`), which forwards to your
+cluster's collector (`--otel-upstream=<url>`). `tilt up -- --otel=off` turns it
+off. `docs/observability.md` lists what the cluster needs; see **Cost** below.
 
 Inkeep's dev secrets (auth, JWT and bypass secrets, the admin login, the
 database passwords) are generated once into the gitignored
@@ -373,12 +374,16 @@ tests the rule against recorded span shapes.
 
 ### Setup checklist
 
-- `otel.enabled=true`, `otel.upstreamEndpoint` (the central Alloy) and
-  `otel.environment` in the chart values (Tilt sets them for dev).
-- Grafana: a Prometheus data source with uid `prometheus`; the chart ships the
-  dashboard when `grafana.dashboard.enabled` is set (prod only).
-- Prod: the network policy lets the collector pod reach the central Alloy on
-  TCP 4318 (nothing else needs to leave the namespace for telemetry).
+- A cluster with an OTLP collector, a traces store, Prometheus that takes OTLP,
+  and Grafana: `docs/observability.md` has the requirements and a minimal setup.
+- `otel.enabled=true`, `otel.upstreamEndpoint` (your cluster's collector) and
+  `otel.environment` in the chart values (Tilt sets them for dev; override the
+  collector with `--otel-upstream`).
+- Grafana: a Prometheus data source (uid `prometheus`, or change the dashboard's
+  **ds** variable); the chart ships the dashboard when `grafana.dashboard.enabled`
+  is set, on one release only.
+- If the namespace has egress policies, the collector pod must reach your
+  collector on TCP 4318 (nothing else leaves the namespace for telemetry).
 
 ### Reading the numbers
 

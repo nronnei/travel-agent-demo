@@ -20,14 +20,17 @@
 # Web search is the dev kill switch: `tilt args -- --search-provider=off` makes
 # every search return 503, so both agents answer without it (default: tavily).
 #
-# OpenTelemetry export to the homelab Alloy is on by default, labelled
-# service.namespace=travel-agent-dev; turn it off with `--otel=off`.
+# OpenTelemetry export is on by default, labelled service.namespace=travel-agent-dev,
+# through the namespace's own Alloy to the cluster's collector
+# (`--otel-upstream=<url>`, default http://alloy.monitoring.svc.cluster.local:4318);
+# turn it off with `--otel=off`. What the cluster needs: docs/observability.md.
 load('ext://namespace', 'namespace_create')
 load('ext://restart_process', 'docker_build_with_restart')
 
 config.define_string('chat-backend', usage='inkeep (default), parlant or langgraph')
 config.define_string('search-provider', usage='tavily (default) or off')
-config.define_string('otel', usage='on (default) or off: OpenTelemetry export to the homelab Alloy')
+config.define_string('otel', usage='on (default) or off: OpenTelemetry export (see docs/observability.md)')
+config.define_string('otel-upstream', usage='OTLP/HTTP URL of the cluster collector the namespace forwards to')
 CFG = config.parse()
 CHAT_BACKEND = CFG.get('chat-backend', 'inkeep')
 if CHAT_BACKEND not in ['inkeep', 'parlant', 'langgraph']:
@@ -41,7 +44,8 @@ if SEARCH_PROVIDER not in ['tavily', 'off']:
 OTEL = CFG.get('otel', 'on')
 if OTEL not in ['on', 'off']:
     fail('--otel must be on or off, not %s' % OTEL)
-OTEL_ENDPOINT = 'http://alloy.monitoring.svc.cluster.local:4318'
+# The cluster's own collector, which the namespace's Alloy forwards to (docs/observability.md).
+OTEL_ENDPOINT = CFG.get('otel-upstream', 'http://alloy.monitoring.svc.cluster.local:4318')
 
 allow_k8s_contexts('default')
 
