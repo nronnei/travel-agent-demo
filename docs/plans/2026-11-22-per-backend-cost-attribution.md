@@ -1,6 +1,6 @@
 ---
 title: Per-backend cost attribution (LLM tokens + Tavily) and OTEL auto-instrumentation
-status: implementing
+status: implemented
 revision: 15
 updated: 2026-11-26
 reviewed: rev 14 (architecture)
@@ -967,7 +967,8 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
   3. **Dashboard not yet viewed in Grafana:** its queries were run against Prometheus; provisioning is homelab item 5.
   4. **Homelab changes:** item 3 (prod network policy: collector → central Alloy on 4318; Inkeep → Anthropic) before rollout; item 1 (explicit `pod_association`) is optional, since the central default already matches on `k8s.pod.ip`; item 5 (dashboard); item 6 (prod Inkeep cutover).
   5. **First-sample undercount** on new token series: accepted as small unless the user wants Prometheus' created-timestamp zero injection (a central change).
-
+- User decisions on the open items (2026-11-28): (1) monitor during the rollout, with an agent prompt (in the rollout plan's appendix); (2) skipped, the pattern-based checks are enough; (3) the dashboard was viewed in Grafana and works; (4) the homelab changes and prod rollout get their own plan, `docs/plans/2026-11-28-cost-otel-prod-rollout.md`; (5) the first-sample undercount is accepted.
+- implemented (2026-11-28): all steps built and verified; the open items accepted or moved to the rollout plan (`2026-11-28-cost-otel-prod-rollout.md`).
 
 ## Review log
 
