@@ -1,8 +1,10 @@
 # Grafana: travel agent cost dashboard
 
-`travel-agent-costs.json` is the source of truth for the **"Travel agent: cost by
-backend"** dashboard (uid `travel-agent-costs`). The homelab repo provisions it into
-Grafana; edit it here and copy it over, rather than editing it in the Grafana UI.
+`deploy/helm/travel-agent/dashboards/travel-agent-costs.json` is the source of truth
+for the **"Travel agent: cost by backend"** dashboard (uid `travel-agent-costs`). The
+chart ships it as a ConfigMap (`grafana.dashboard.enabled`), which Grafana's dashboard
+sidecar loads into the "Travel agent" folder. Edit the JSON here, not in the Grafana UI:
+the next deploy overwrites UI edits.
 
 ## What it shows
 
@@ -45,5 +47,6 @@ Units are tokens and credits; there are no USD figures.
 
 1. Prometheus data source with uid `prometheus` (the `ds` variable picks it; change it
    there if yours differs).
-2. Provision the JSON from the homelab repo (or import it once by hand: Dashboards →
-   New → Import → upload the file).
+2. `grafana.dashboard.enabled: true` on one release (the homelab prod values), and a
+   Grafana whose dashboard sidecar watches every namespace for the `grafana_dashboard`
+   label. Or import the JSON by hand: Dashboards → New → Import.

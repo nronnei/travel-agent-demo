@@ -350,7 +350,7 @@ Note for each run:
 
 What each backend costs, in **LLM tokens** and **Tavily credits** (no USD), on
 the Grafana dashboard "Travel agent: cost by backend"
-(`deploy/grafana/travel-agent-costs.json`; its README lists the panels and
+(`deploy/helm/travel-agent/dashboards/travel-agent-costs.json`; `deploy/grafana/README.md` lists the panels and
 queries). Pick the environment with its **Environment** variable.
 
 ### How cost is measured, per backend
@@ -375,8 +375,8 @@ tests the rule against recorded span shapes.
 
 - `otel.enabled=true`, `otel.upstreamEndpoint` (the central Alloy) and
   `otel.environment` in the chart values (Tilt sets them for dev).
-- Grafana: a Prometheus data source with uid `prometheus`, and the dashboard
-  provisioned from the homelab repo.
+- Grafana: a Prometheus data source with uid `prometheus`; the chart ships the
+  dashboard when `grafana.dashboard.enabled` is set (prod only).
 - Prod: the network policy lets the collector pod reach the central Alloy on
   TCP 4318 (nothing else needs to leave the namespace for telemetry).
 

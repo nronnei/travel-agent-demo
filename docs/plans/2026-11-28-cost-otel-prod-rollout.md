@@ -1,10 +1,11 @@
 ---
 title: Prod rollout of cost attribution, OTEL and the in-chart Inkeep
-status: draft
-revision: 1
+status: implementing
+revision: 3
 updated: 2026-11-28
 reviewed: none
 issue:
+base: 2902ee7e2b72037cb3843ab446b13d00d06cdea4
 artifact: https://claude.ai/artifact/11dwmdajbCADsusWDXimD6
 ---
 
@@ -16,7 +17,7 @@ artifact: https://claude.ai/artifact/11dwmdajbCADsusWDXimD6
 - the homelab values (`otel.*`, then `inkeep.server.*`);
 - the dashboard, shipped by the chart as a `grafana_dashboard` ConfigMap, so nothing is provisioned by hand;
 - the prod Inkeep secrets and agent push;
-- retiring the homelab Inkeep after a soak.
+- retiring the homelab Inkeep about an hour after the cutover is verified.
 
 A monitoring prompt for an agent to watch the rollout (memory especially) is in the appendix.
 
@@ -63,7 +64,7 @@ A monitoring prompt for an agent to watch the rollout (memory especially) is in 
 ### Phases
 - **Phase A (OTEL only):** netpol, `otel.*` values, deploy. Chat still uses the homelab Inkeep. Low risk: OTEL can be turned off with one value.
 - **Phase B (Inkeep cutover):** prod Inkeep secrets, `inkeep.server.*` values, deploy, push, smoke, credential scan. Rollback is one value flip back to `inkeep.apiUrl`.
-- **Retire** the homelab Inkeep after a soak.
+- **Retire** the homelab Inkeep about an hour after phase B is verified (user, rev 2).
 
 ### Alternatives considered
 | Option | Pros | Cons | Why not |
@@ -116,9 +117,9 @@ A monitoring prompt for an agent to watch the rollout (memory especially) is in 
   - a credential pattern scan over the prod Inkeep spans from the smoke window finds nothing (the parent plan's step 7 scan).
 - **Then:** remove the `inkeep` namespace egress from `travel-agent-policy` and re-apply.
 
-### 7. Retire the homelab Inkeep (after a soak)
-- After the soak (open question 2), with the user's go-ahead:
-  - one Longhorn backup of the Doltgres PVC and the `inkeep-db` volume, kept until the deletion is confirmed fine (project practice: the homelab isn't prod, so one backup, deleted after);
+### 7. Retire the homelab Inkeep (about an hour after phase B is verified)
+- Once phase B's checks pass and the monitoring agent has reported an hour of clean checks, with the user's go-ahead (deleting it can't be undone):
+  - no backup: the user confirmed it holds nothing worth keeping (rev 2);
   - `helm uninstall inkeep -n inkeep`, delete `inkeep-db` (CNPG), the PVCs, `inkeep-secrets` and the namespace;
   - remove `apps/inkeep`, `helm-values/inkeep.yaml` and `scripts/generate-inkeep-secret.sh` from the homelab repo.
 - **Verify:** prod chat still works; nothing in the cluster references `inkeep-api.inkeep`.
@@ -129,10 +130,10 @@ A monitoring prompt for an agent to watch the rollout (memory especially) is in 
 - The appendix monitoring prompt, run by an agent from the start of phase A to the end of the soak.
 
 ## Rollout & rollback
-- **Order:** steps 1 → 7 as numbered; phase B only after phase A has run clean for at least a day of normal traffic.
+- **Order:** steps 1 → 7 as numbered; phase B once phase A's checks pass and the monitoring agent's first checks are clean; step 7 only on the monitoring agent's GO, about an hour after phase B (run a few smoke conversations in that hour, since real traffic may be too low to judge).
 - **Rollback:**
   - Phase A: `otel.enabled: false` (and `grafana.dashboard.enabled: false` if needed), deploy. The netpol additions can stay; they grant only the collector's egress and Anthropic.
-  - Phase B: `inkeep.server.enabled: false`, `inkeep.apiUrl: http://inkeep-api.inkeep:3002`, deploy; restore the `inkeep` egress rule first if it was already removed. The in-chart Inkeep's PVC and databases stay (`retain`).
+  - Phase B: `inkeep.server.enabled: false`, `inkeep.apiUrl: http://inkeep-api.inkeep:3002`, deploy; restore the `inkeep` egress rule first if it was already removed. The in-chart Inkeep's PVC and databases stay (`retain`). This rollback only works until step 7 deletes the homelab Inkeep; after that, a broken in-chart Inkeep is fixed forward.
   - If a credential appears in telemetry: OTEL off for that service, rotate it, purge or record (as the parent plan).
 
 ## Security considerations
@@ -154,11 +155,11 @@ A monitoring prompt for an agent to watch the rollout (memory especially) is in 
 | Memory over the limit on runtime images | Medium | OOM kills | Appendix monitoring; raise limits or use the allow-list fallback |
 | Dashboard uid clash between releases | Low | One overwrites the other | Only the prod release ships the ConfigMap |
 | Push fails (tool discovery needs the API) | Low | No agents in the new Inkeep | Push after the API and Inkeep are Ready; rerun |
-| Cutover drops in-flight conversations | Certain (by choice) | Old threads not in the new Inkeep | Accepted (no migration); homelab Inkeep kept until retirement |
+| Cutover drops in-flight conversations | Certain (by choice) | Old threads not in the new Inkeep | Accepted (no migration; nothing in it worth keeping) |
+| A problem shows up after the homelab Inkeep is gone | Low | No fallback Inkeep | Retire only after an hour of clean monitoring; fix forward (the in-chart Inkeep's data is retained) |
 
 ## Open questions
-1. **Ship the dashboard from the chart (ConfigMap) rather than the homelab repo?** Recommended: yes (step 1).
-2. **Soak length before retiring the homelab Inkeep?** Recommended: one week of normal use with the monitoring clean.
+None. Rev 2 (user): Q1 the dashboard ships from the chart; Q2 retire the homelab Inkeep about an hour after phase B is verified, with no backup.
 
 ## Follow-ups
 - Measure LangGraph's and Parlant's RSS on the runtime images (a one-off prod-like deploy with `langgraph.enabled`) before either is enabled in prod.
@@ -167,58 +168,96 @@ A monitoring prompt for an agent to watch the rollout (memory especially) is in 
 ## Decision log
 - rev 1: two phases (drafter); dashboard from the chart (drafter, open question 1); Anthropic in the shared FQDN list, the collector's egress in its own policy (drafter).
 
+- rev 2 (user): dashboard from the chart; retire the homelab Inkeep about an hour after the cutover is verified, without a backup ("there's nothing useful in there").
+- rev 3 (user question): the monitoring prompt follows the shortened horizon: 5-minute checks in each phase's first hour, a GO/NO-GO for the teardown, a traffic floor, Inkeep-specific checks, and 24 hours of checks after the teardown.
+- rev 3: **approved** by the user (2026-11-28), unreviewed by choice.
+
 ## Changelog
 - rev 1: initial draft.
+- rev 2: answered both open questions; step 7 shortened to an hour's soak with no backup; rollback notes say phase B's rollback ends at step 7.
+- rev 3: the appendix prompt rewritten for the hour-long soak (5-minute checks, GO/NO-GO verdict for step 7, traffic floor, Inkeep checks, 24 h of checks after the teardown).
+
+## Implementation notes
+- **Step 1 (2026-11-28):** the dashboard moved to `deploy/helm/travel-agent/dashboards/travel-agent-costs.json`; `templates/grafana-dashboard.yaml` renders the `grafana_dashboard` ConfigMap (folder annotation from `grafana.dashboard.folder`) when `grafana.dashboard.enabled`. Verified: nothing rendered by default; with it on, the label, annotation and the embedded JSON parse (uid `travel-agent-costs`, 7 panels); the packaged chart includes `dashboards/`; `helm lint` passes. `deploy/grafana/README.md` and `docs/agent-frameworks.md` point at the new location.
 
 ## Appendix: rollout monitoring prompt
 
-Give this to an agent (Claude Code with the Grafana MCP and `kubectl` read access) at the start of phase A. It only reads and reports.
+Give this to an agent (Claude Code with the Grafana MCP and read-only `kubectl`) when phase A's deploy finishes, and tell it when phase B's deploy finishes. It only reads and reports. Its GO/NO-GO at the end of phase B's hour gates step 7, the irreversible teardown.
 
 ```text
 You are monitoring a production rollout of the travel-agent app on a homelab
-Kubernetes cluster. Do not change anything: no kubectl apply/edit/delete/scale/
-rollout, no Grafana writes. Read and report only. If something needs action,
-say what and why, and stop.
+Kubernetes cluster. Read and report only: no kubectl apply/edit/delete/scale/
+rollout/exec, no Grafana writes. If something needs action, say what and why,
+and stop.
 
 Scope: namespace "travel-agent". Components (label app.kubernetes.io/component):
 api, web, alloy (the release's own OTEL collector), and after the Inkeep cutover
 inkeep-api, inkeep-ui, inkeep-spicedb, inkeep-doltgres. Prometheus datasource
-uid "prometheus", Tempo uid "tempo".
+uid "prometheus", Tempo uid "tempo". The old Inkeep lives in namespace "inkeep"
+and is due to be deleted about an hour after the cutover, so your verdict at the
+end of that hour matters: it can't be undone.
 
-Every 30 minutes for the next 24 hours (then every 2 hours until told to stop),
-check and record:
+Cadence:
+- After phase A (OTEL on) and again after phase B (Inkeep cutover), I'll tell
+  you the deploy time T. Check every 5 minutes for the first hour after T, using
+  5-minute windows ([5m]); then every 30 minutes.
+- After I tell you the old Inkeep is deleted, check every 2 hours for 24 hours,
+  using 2-hour windows, then write the final summary.
 
-1. Memory against limits, per container (the main open risk):
+Every check:
+1. Memory against limits, per container:
    max by (pod, container) (container_memory_working_set_bytes{namespace="travel-agent", container!="", container!="POD"})
    / on (pod, container) group_left max by (pod, container) (kube_pod_container_resource_limits{namespace="travel-agent", resource="memory"})
-   Also the peak over the window with max_over_time(...[30m]).
-   Flag: WARN at > 0.80, URGENT at > 0.90 or if the ratio climbs steadily
-   across three checks (a leak).
+   and its max_over_time over the window. WARN > 0.80; URGENT > 0.90, or if it
+   rises at every check for an hour (possible leak).
 2. Restarts and OOM kills:
-   increase(kube_pod_container_status_restarts_total{namespace="travel-agent"}[30m])
+   increase(kube_pod_container_status_restarts_total{namespace="travel-agent"}[<window>])
    kube_pod_container_status_last_terminated_reason{namespace="travel-agent", reason="OOMKilled"}
-   Flag: URGENT on any OOMKilled; WARN on any restart.
-3. Telemetry export health (the release collector):
-   increase(otelcol_exporter_send_failed_spans_total{namespace="travel-agent"}[30m]),
-   increase(otelcol_exporter_send_failed_metric_points_total{namespace="travel-agent"}[30m]),
-   or, if those series don't exist, `kubectl -n travel-agent logs deploy/travel-agent-alloy --since=30m`
-   filtered for "level=error" or "Exporting failed".
-   Flag: WARN if failures persist across two checks.
-4. Data is arriving:
-   count by (job) ({job=~"travel-agent/.*"}) in Prometheus is non-zero for
-   travel-agent/travel-agent-api (and travel-agent/travel-agent-inkeep after
-   the cutover); a TraceQL search { resource.service.namespace = "travel-agent" }
-   over the last 30 minutes returns traces whose resource k8s.deployment.name is
-   the app's own deployment, never travel-agent-alloy.
-5. Latency of the API (no SLO, watch for jumps against the first day's values):
-   histogram_quantile(0.99, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job="travel-agent/travel-agent-api"}[30m])))
-6. Network drops, if you have shell access to the cluster:
-   hubble observe -n travel-agent --verdict DROPPED --since 30m
-   Flag: WARN on anything new, with the destination.
+   URGENT on any OOMKilled; WARN on any restart.
+3. Pods ready: kube_pod_container_status_ready{namespace="travel-agent"} == 0
+   for any container for more than one check: WARN.
+4. Collector export health:
+   increase(otelcol_exporter_send_failed_spans_total{namespace="travel-agent"}[<window>])
+   and ..._send_failed_metric_points_total; if absent, the collector's logs
+   (kubectl -n travel-agent logs deploy/travel-agent-alloy --since=<window>)
+   for "level=error" or "Exporting failed". WARN if failures persist for two checks.
+5. Data arriving: Prometheus count by (job) ({job=~"travel-agent/.*"}) is non-zero
+   for travel-agent/travel-agent-api (after phase B also travel-agent/travel-agent-inkeep);
+   TraceQL { resource.service.namespace = "travel-agent" } over the window
+   returns traces tagged with the app's own k8s.deployment.name, never
+   travel-agent-alloy.
+6. Traffic: sum(increase(http_server_request_duration_seconds_count{job="travel-agent/travel-agent-api", http_route=~"/api/chat|/api/search/web|/api/mcp"}[<window>])).
+   If it's under ~5 chat requests in the window, mark memory and latency
+   results "INSUFFICIENT TRAFFIC", not OK.
+7. Errors: API responses with http_response_status_code >= 500 by route
+   (sum by (http_route, http_response_status_code) (increase(http_server_request_duration_seconds_count{job="travel-agent/travel-agent-api", http_response_status_code=~"5.."}[<window>]))),
+   and the API's logs for "Inkeep responded" or "ERROR". WARN on any.
+8. Latency: histogram_quantile(0.99, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{job="travel-agent/travel-agent-api"}[<window>]))).
+   Compare with your first readings after phase A; WARN on a jump of more than 2x.
+9. Network drops (if you have hubble): hubble observe -n travel-agent --verdict DROPPED --since <window>.
+   WARN on anything, with the destination.
 
-Report each check as a short table (component, value, status). Put WARN and
-URGENT findings first, with the query, the value, and the likely cause. At the
-end of the first 24 hours, write a summary: peak memory ratio per container,
-restarts, export failures, and whether the parent plan's memory bar (working
-set under 80% of the limit) held.
+Also, after phase B only:
+10. Inkeep is doing the work: API log lines "search ok client=inkeep" (or
+    travel_agent_search_requests_total{client="inkeep", outcome="ok"} rising),
+    and travel_agent_llm_tokens{job="travel-agent/travel-agent-inkeep"} present,
+    by model.
+11. Nothing still uses the old Inkeep: no requests from travel-agent to the
+    "inkeep" namespace (hubble observe --from-namespace travel-agent --to-namespace inkeep,
+    or the API's INKEEP_AGENTS_API_URL env pointing at the in-namespace service).
+
+Report each check as a short table (component, value, status), WARN and URGENT
+first, each with the query, the value and the likely cause.
+
+At the end of phase B's first hour, give a verdict on deleting the old Inkeep:
+- GO only if: no URGENT; no restarts of inkeep-api, inkeep-spicedb or
+  inkeep-doltgres; at least 3 successful Inkeep chat turns (with at least one
+  "search ok client=inkeep") in the hour; no 5xx on /api/chat; no drops toward
+  api.anthropic.com; nothing calling the "inkeep" namespace.
+- Otherwise NO-GO, with what's missing. Too little traffic is a NO-GO, and
+  the fix is a few smoke conversations, not waiting.
+
+Final summary (24 hours after the teardown): peak memory ratio per container,
+restarts, export failures, latency compared with the first readings, and
+whether the parent plan's memory bar (working set under 80% of the limit) held.
 ```
