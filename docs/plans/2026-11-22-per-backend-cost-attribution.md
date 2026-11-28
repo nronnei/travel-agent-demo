@@ -12,7 +12,7 @@ artifact: https://claude.ai/artifact/1MZYto1wGay6bpGLFhXEoP
 # Per-backend cost attribution (LLM tokens + Tavily) and OTEL auto-instrumentation
 
 ## Summary
-The framework evaluation needs to say what each chat backend (Inkeep, Parlant, LangGraph) costs to run, and the numbers should be visible in the homelab Grafana. The same change turns on OpenTelemetry **auto-instrumentation (traces + metrics)** for every server-side service, and brings **Inkeep into this repo's chart**, so all three backends run the same way under Tilt and Helm (rev 14).
+The framework evaluation needs to say what each chat backend (Inkeep, Parlant, LangGraph) costs to run, and the numbers should be visible in Grafana. The same change turns on OpenTelemetry **auto-instrumentation (traces + metrics)** for every server-side service, and brings **Inkeep into this repo's chart**, so all three backends run the same way under Tilt and Helm (rev 14).
 
 - **Telemetry path (rev 14):** every service exports OTLP to **this release's own Alloy collector** (in the chart, one per environment). It tags each span with its pod IP, derives the LLM token metric, and forwards everything to the central `monitoring/alloy`, which does the Kubernetes tagging and writes to Tempo, Prometheus and Loki as today.
 - **LLM usage is measured in tokens, not dollars** (rev 11). The apps only emit standard OTEL `gen_ai` spans: the Anthropic SDKs trace themselves (TypeScript and Python), and Inkeep's built-in telemetry does the same. **One rule in the project Alloy** turns those spans into one token metric with one meaning for every backend. Moving to Bedrock later means adding one rule for the AWS SDK's spans; the dashboard stays.
@@ -20,7 +20,7 @@ The framework evaluation needs to say what each chat backend (Inkeep, Parlant, L
   - tags each search with the calling backend (`X-Project-ID` at Tavily);
   - reads the credits used (`include_usage`);
   - counts both in two OTEL counters, because nothing automatic can see Tavily credits.
-- **Inkeep in the chart (rev 14):** `inkeep.server.enabled` deploys Inkeep's API, SpiceDB and Doltgres (plus its databases on the release's CloudNativePG cluster) next to the app, the same way `parlant.enabled` and `langgraph.enabled` work. `tilt up -- --chat-backend=inkeep` runs a dev Inkeep of its own, so dev no longer shares the homelab Inkeep.
+- **Inkeep in the chart (rev 14):** `inkeep.server.enabled` deploys Inkeep's API, SpiceDB and Doltgres (plus its databases on the release's CloudNativePG cluster) next to the app, the same way `parlant.enabled` and `langgraph.enabled` work. `tilt up -- --chat-backend=inkeep` runs a dev Inkeep of its own, so dev no longer shares the external Inkeep.
 - A "Travel agent: cost by backend" dashboard shows tokens and credits side by side, with a per-backend "how cost is measured" table in `docs/agent-frameworks.md` for the team that picks this up.
 - **Docker compose is out of scope entirely.** Support for it is being dropped, so this plan changes nothing in it.
 
@@ -69,9 +69,9 @@ The framework evaluation needs to say what each chat backend (Inkeep, Parlant, L
 - **No per-guest/per-session labels on metrics, and no spend enforcement or per-backend limits.** The rate bucket and daily cap stay shared; the side effects are documented (see Performance).
 - **No stripping of incoming trace headers at the edge** in this change (see Follow-ups).
 - **No local report script** (dropped in rev 2).
-- **The central Alloy, Grafana and network-policy configs live outside this repo.** This plan lists the changes they need in one place (see Homelab changes). Inkeep and the project collector move **into** the chart.
+- **The central Alloy, Grafana and network-policy configs live outside this repo.** This plan lists the changes they need in one place (see Cluster-side changes). Inkeep and the project collector move **into** the chart.
 - **No tail sampling yet.** The collector layout leaves room for it (after the token rule), but sampling stays `parentbased_always_on`.
-- **No migration of the homelab Inkeep's data** (rev 14, open question 2): agents are re-pushed from `apps/agents`; old conversations stay in the homelab Inkeep until it's retired.
+- **No migration of the external Inkeep's data** (rev 14, open question 2): agents are re-pushed from `apps/agents`; old conversations stay in the external Inkeep until it's retired.
 
 ## Context
 ### Search and Tavily
@@ -108,7 +108,7 @@ The framework evaluation needs to say what each chat backend (Inkeep, Parlant, L
 - **The Anthropic SDKs trace themselves (checked 2026-11-26):** TypeScript `internal/tracing.mjs` and Python `_tracing.py`. On by default (`ANTHROPIC_OPEN_TELEMETRY=false` turns them off), content mode `metadata_only` unless `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=content`, using the global tracer provider. Spans (TS scope `com.anthropic.sdk.typescript`, name `anthropic.messages.create`) carry `gen_ai.usage.input_tokens` (in a mock test, 118 = 11 input + 100 cache read + 7 cache write, so it includes cache), `output_tokens`, `cache_read.input_tokens` and `cache_write.input_tokens`. They emit **no metrics**. `ANTHROPIC_OPEN_TELEMETRY_PROPAGATION` (default on) adds `traceparent` to calls to Anthropic.
 - **AWS SDK instrumentation** (`@opentelemetry/instrumentation-aws-sdk`, on by default in auto-instrumentations) covers Bedrock Runtime `Converse`, `ConverseStream`, `InvokeModel` and `InvokeModelWithResponseStream` with `gen_ai` spans and its own token histogram: the span source after a Bedrock move.
 - **Inkeep's telemetry:** `@inkeep/agents-core` 0.80.4 `constants/otel-attributes.js` names `gen_ai.usage.input_tokens`/`output_tokens`/`cache_read.input_tokens`/`cache_creation.input_tokens`, the AI SDK's `ai.usage.promptTokens`/`completionTokens`, `gen_ai.cost.estimated_usd`, and `tenant.id`/`project.id`/`agent.id`. Read from constants only; step 7 checks real spans.
-- **Inkeep today:** one homelab install (`homelab/helm-values/inkeep.yaml`, bjw-s `app-template` 5.3.0, mirroring Inkeep's docker-compose) serves dev and prod (projects `travel-agent-dev` / `travel-agent`). Components: `agents-api` 0.80.4 (with an `agents-migrate` init container), `agents-manage-ui`, SpiceDB v1.49.2 (with a `migrate head` init), Doltgres 0.56.7 (the manage DB; a StatefulSet, not Postgres), and the run DB plus SpiceDB's datastore on CNPG (`homelab/apps/inkeep/postgres.yaml`). One `inkeep-secrets` Secret (`homelab/scripts/generate-inkeep-secret.sh`) holds AI keys, admin login, auth/JWT/bypass secrets, SpiceDB's preshared key and DB URLs. `OTEL_SDK_DISABLED=true`. The API reaches it through `inkeep.apiUrl`; Tilt reads its run-API bypass secret from the cluster; `scripts/push-agents.sh` pushes agents to it.
+- **Inkeep today:** one external install (a bjw-s `app-template` 5.3.0 release mirroring Inkeep's docker-compose) serves dev and prod (projects `travel-agent-dev` / `travel-agent`). Components: `agents-api` 0.80.4 (with an `agents-migrate` init container), `agents-manage-ui`, SpiceDB v1.49.2 (with a `migrate head` init), Doltgres 0.56.7 (the manage DB; a StatefulSet, not Postgres), and the run DB plus SpiceDB's datastore on CNPG. One `inkeep-secrets` Secret holds AI keys, admin login, auth/JWT/bypass secrets, SpiceDB's preshared key and DB URLs. `OTEL_SDK_DISABLED=true`. The API reaches it through `inkeep.apiUrl`; Tilt reads its run-API bypass secret from the cluster; `scripts/push-agents.sh` pushes agents to it.
 - **Parlant 4.x has built-in OTEL** (`parlant/bin/server.py` `_define_tracer`/`_define_meter`/`_define_logger`), turned on per signal by `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_ENDPOINT`.
   - It reads `OTEL_EXPORTER_OTLP_PROTOCOL` (default `grpc`), `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`.
   - **Its tracer always adds a `ConsoleSpanExporter`** (`adapters/tracing/opentelemetry.py` ~line 115), so turning tracing on also prints every span as JSON to stdout, which `alloy-logs` ships to Loki.
@@ -121,15 +121,15 @@ The framework evaluation needs to say what each chat backend (Inkeep, Parlant, L
   - LangGraph and Parlant use `strategy: Recreate` only when `persistence.enabled`, which defaults to false since the CNPG move (`values.yaml`).
   - Memory limits: api 512Mi, langgraph 512Mi, parlant 1Gi.
 - **Shutdown:** LangGraph `main.ts` registers `process.once` for SIGTERM and SIGINT: `app.close()` → `checkpointer.close()` (the pool) → `process.exit(0)`. The API's `main.ts` calls `app.enableShutdownHooks()`, and `PoolShutdown.onApplicationShutdown` ends the pool. Nest removes its signal listener when shutdown starts and re-raises the signal after the hooks finish.
-- **Homelab network policy:** the prod `travel-agent` namespace has a CiliumNetworkPolicy (homelab repo `apps/travel-agent/network-policy.yaml`). Its egress allows the namespace itself, kube-dns, `inkeep` api:3002 and `api.tavily.com:443`, so **not** `monitoring/alloy`. `travel-agent-dev` has no policy.
-- **Homelab observability** (Grafana MCP 2026-11-22; `homelab/helm-values/alloy.yaml` read 2026-11-26):
+- **Network policy:** the prod `travel-agent` namespace has a CiliumNetworkPolicy. Its egress allows the namespace itself, kube-dns, `inkeep` api:3002 and `api.tavily.com:443`, so **not** `monitoring/alloy`. `travel-agent-dev` has no policy.
+- **The cluster's observability stack** (Grafana MCP 2026-11-22; the central Alloy's config read 2026-11-26):
   - Datasources: `prometheus`, `loki`, `tempo`, `alertmanager`. No dashboards for this app.
   - Central Alloy v1.21.3, one replica, default stability level. Pipeline: `otelcol.receiver.otlp` (4317/4318) → `otelcol.processor.k8sattributes` (namespace, pod, deployment, statefulset, node, container; **no explicit `pod_association`**) → `batch` → Tempo (OTLP gRPC), Prometheus (native OTLP receiver `/api/v1/otlp`) and Loki (OTLP). No label rules, routing, filtering or sampling.
   - `k8sattributes` matches by the sender's IP, so telemetry relayed through another collector gets the collector's pod. The documented fix: the relaying collector runs `k8sattributes` with `passthrough = true` (adds `k8s.pod.ip` only, no API access), and the central one matches on that resource attribute before the connection IP.
   - `otelcol.connector.signaltometrics` exists in v1.21 (experimental: needs `--stability.level=experimental`). It sums OTTL expressions over spans, with conditions and attribute grouping, and emits delta metrics (the docs pair it with `deltatocumulative` + `interval`).
 - **Anthropic keys per process:** Inkeep `inkeep/inkeep-secrets` today, the in-chart Inkeep secret after rev 14; Parlant `travel-agent-parlant-dev` / `parlant.existingSecret`; LangGraph `travel-agent-langgraph-dev` / `langgraph.existingSecret`.
 - **Chart patterns to reuse:** `<component>.enabled`, `existingSecret`, `travel-agent.deployment` (no init containers yet), `travel-agent.postgresConnection` (a role per backend on `<release>-db`, password from a basic-auth Secret Tilt makes from `.env`, TLS verified with the cluster CA), and `postgres.yaml`'s `$backends` list (one `DatabaseRole` + `Database` each).
-- **Memory:** findings go in `docs/agent-frameworks.md` ([framework-evaluation-log]). Inkeep's data components force Haiku with tool_choice. The user evaluates Inkeep for other uses, so the homelab Inkeep may serve other projects.
+- **Memory:** findings go in `docs/agent-frameworks.md` ([framework-evaluation-log]). Inkeep's data components force Haiku with tool_choice. The user evaluates Inkeep for other uses, so an existing Inkeep install may serve other projects.
 
 ### Tavily facts (docs.tavily.com, read 2026-11-22)
 - **`include_usage: true`** adds `usage.credits` to the response.
@@ -152,7 +152,7 @@ The framework evaluation needs to say what each chat backend (Inkeep, Parlant, L
 - **Inkeep's spans carry token usage on exactly one span per model call** (the AI SDK's `doGenerate`/`doStream` level), with `project.id`. ⛔ Checked in step 7; the token rule for Inkeep is written from what step 7 records.
 - **The Python Anthropic SDK's spans count input like the TypeScript ones** (cache included) and use the global provider Parlant sets. ⛔ Checked in step 7.
 - **Each LLM call has exactly one usage-bearing span per backend** (no second instrumentation). ⛔ Checked in step 7.
-- **Inkeep runs from its published images with the chart's own templates,** with the run DB and SpiceDB on the release's CNPG cluster over verified TLS. ⛔ Checked in step 5; the fallback is an in-namespace plain-text `pg_hba` rule for those two roles, as the homelab has today.
+- **Inkeep runs from its published images with the chart's own templates,** with the run DB and SpiceDB on the release's CNPG cluster over verified TLS. ⛔ Checked in step 5; the fallback is an in-namespace plain-text `pg_hba` rule for those two roles, as the external install has today.
 
 ## Design
 
@@ -313,21 +313,21 @@ otelcol.exporter.otlphttp "central" { client { endpoint = "<otel.upstreamEndpoin
 - **One path per signal:** apps → project Alloy → central Alloy. Nothing exports to the central Alloy directly, and only the project Alloy runs the token rule.
 - **One writer per token series, because of `Recreate`** (A24): the derived series carry no `service.instance.id`, so an old and a new collector pod overlapping in a rolling update would both write the same cumulative series and `increase()` would over-count on every deploy. During a restart, app exports retry, so a few seconds' gap costs nothing.
 - The derived metric has no `k8s.pod.ip`, so the central Alloy tags it with the collector's own pod. That lands only in `target_info`; the token series keep their `job` from `service.namespace`/`service.name`.
-- **Central tagging stays central.** The central Alloy gets explicit `pod_association` rules (homelab item 1): `k8s.pod.ip` resource attribute first, then the connection IP. Apps that send to it directly behave as today.
+- **Central tagging stays central.** The central Alloy gets explicit `pod_association` rules (cluster change 1): `k8s.pod.ip` resource attribute first, then the connection IP. Apps that send to it directly behave as today.
 - **Resource attributes pass through untouched** (`service.name`, `service.namespace`, `deployment.environment.name`), so Prometheus' `job` and the dashboard queries don't change.
 - **Health:** probes on `/-/ready` (port 12345). Alloy's own metrics are on the same port; a ServiceMonitor is optional (`otel.collector.serviceMonitor`, default off), like `postgres.podMonitor`.
-- **Netpol:** apps reach it inside the namespace (already allowed); only the collector pod needs egress to `monitoring/alloy:4318` (homelab item 3).
+- **Netpol:** apps reach it inside the namespace (already allowed); only the collector pod needs egress to `monitoring/alloy:4318` (cluster change 3).
 - **Fallback if the experimental connector misbehaves:** the per-app span-to-metric processor from rev 13 (git history on this branch) for Node, and a record-only sampler; tokens for Inkeep would then be a gap.
 
 ### Inkeep in the chart (rev 14)
 **Ships as its own PR, merged before the cost PR** (A25): it doesn't depend on the cost work, and its rollback (back to `inkeep.apiUrl`) shouldn't be tied to OTEL's. Only step 7's Inkeep run depends on it. It stays in this plan.
 
-`inkeep.server.enabled` deploys Inkeep with the chart's own templates, the same way Parlant and LangGraph are deployed (open question 1 asks whether to use an umbrella chart instead). Images pinned to the repo's `@inkeep/*` version (0.80.4) and the homelab's SpiceDB v1.49.2 / Doltgres 0.56.7.
+`inkeep.server.enabled` deploys Inkeep with the chart's own templates, the same way Parlant and LangGraph are deployed (open question 1 asks whether to use an umbrella chart instead). Images pinned to the repo's `@inkeep/*` version (0.80.4) and the external install's SpiceDB v1.49.2 / Doltgres 0.56.7.
 
 | Component | Template | Notes |
 |---|---|---|
-| `inkeep-api` | `templates/inkeep-api.yaml`, through `travel-agent.deployment` (extended to take `initContainers`) | `agents-api` on 3002, `strategy: Recreate`; init `agents-migrate`; env as in the homelab values (`SPICEDB_ENDPOINT=<release>-inkeep-spicedb:50051`, `INKEEP_AGENTS_API_URL`, `INKEEP_AGENTS_MANAGE_UI_URL`, `BLOB_STORAGE_LOCAL_PATH`) plus `travel-agent.otelEnv` (`travel-agent-inkeep`, node). No `OTEL_SDK_DISABLED` |
-| `inkeep-ui` | `templates/inkeep-ui.yaml` | `agents-manage-ui` on 3000, optional (`inkeep.ui.enabled`, default true in dev). No ingress by default: Tilt port-forwards it; prod adds one in the homelab values if wanted |
+| `inkeep-api` | `templates/inkeep-api.yaml`, through `travel-agent.deployment` (extended to take `initContainers`) | `agents-api` on 3002, `strategy: Recreate`; init `agents-migrate`; env as in the external install's values (`SPICEDB_ENDPOINT=<release>-inkeep-spicedb:50051`, `INKEEP_AGENTS_API_URL`, `INKEEP_AGENTS_MANAGE_UI_URL`, `BLOB_STORAGE_LOCAL_PATH`) plus `travel-agent.otelEnv` (`travel-agent-inkeep`, node). No `OTEL_SDK_DISABLED` |
+| `inkeep-ui` | `templates/inkeep-ui.yaml` | `agents-manage-ui` on 3000, optional (`inkeep.ui.enabled`, default true in dev). No ingress by default: Tilt port-forwards it; prod adds one in its values if wanted |
 | `inkeep-spicedb` | `templates/inkeep-spicedb.yaml` | `serve` with a `migrate head` init; gRPC 50051 |
 | `inkeep-doltgres` | `templates/inkeep-doltgres.yaml` (StatefulSet + PVC) | The manage DB. Doltgres isn't Postgres, so it can't live on CNPG |
 | Run DB + SpiceDB datastore | `postgres.yaml` `$backends` gains `inkeep` and `spicedb` when `inkeep.server.enabled` | Roles and databases on `<release>-db`, passwords from basic-auth Secrets, TLS verified with the cluster CA (`sslmode=verify-full&sslrootcert=/etc/postgres-ca/ca.crt` in both URLs; checked in step 5) |
@@ -335,23 +335,24 @@ otelcol.exporter.otlphttp "central" { client { endpoint = "<otel.upstreamEndpoin
 - **Values layout** (A30): the in-chart stack lives under `inkeep.server.{enabled,secret,image,ui,spicedb,doltgres,blobStorage}`. The existing `inkeep.existingSecret` stays the **API's** env Secret (bypass secret when external, intake/search tokens, Tavily key, LangGraph token); its comment says so.
 - **Secrets:** `inkeep.server.secret` names the Inkeep server's Secret: AI key, admin login, run/manage bypass secrets, JWT signing secret and keypair, `BETTER_AUTH_SECRET`, SpiceDB preshared key, Doltgres password, **and `SEARCH_API_TOKEN` and `INTAKE_API_TOKEN`**, which Inkeep sends back to the API (`apps/agents/.../web-search.ts:10-16`, the context fetcher). The chart builds the DB URLs itself from the role passwords.
   - **Dev:** Tilt makes it. Random values are generated **once** into the gitignored `.tilt/inkeep-dev.env` (rotating them every `tilt up` would sign everyone out and break JWTs); `ANTHROPIC_API_KEY`, `SEARCH_API_TOKEN` and `INTAKE_API_TOKEN` come from `.env`.
-  - **Prod:** `scripts/generate-inkeep-secret.sh` (ported from the homelab repo, writing the new key set) and `kubectl apply`. It **copies** `SEARCH_API_TOKEN` and `INTAKE_API_TOKEN` from the API's prod Secret and never generates them (A26).
-- **API wiring:** with `inkeep.server.enabled`, the API's `INKEEP_AGENTS_API_URL` is `http://<release>-inkeep-api:3002` and `INKEEP_AGENTS_RUN_API_BYPASS_SECRET` comes from the Inkeep Secret (`secretEnv`), so Tilt stops reading the homelab Inkeep's secret. `inkeep.apiUrl` (external) still works when `inkeep.server.enabled` is false. The API template fails if `chat.backend=inkeep` and neither is set.
+  - **Prod:** `scripts/generate-inkeep-secret.sh` (ported from the external install's generator, writing the new key set) and `kubectl apply`. It **copies** `SEARCH_API_TOKEN` and `INTAKE_API_TOKEN` from the API's prod Secret and never generates them (A26).
+- **API wiring:** with `inkeep.server.enabled`, the API's `INKEEP_AGENTS_API_URL` is `http://<release>-inkeep-api:3002` and `INKEEP_AGENTS_RUN_API_BYPASS_SECRET` comes from the Inkeep Secret (`secretEnv`), so Tilt stops reading the external Inkeep's secret. `inkeep.apiUrl` (external) still works when `inkeep.server.enabled` is false. The API template fails if `chat.backend=inkeep` and neither is set.
 - **Tilt:** `--chat-backend=inkeep` sets `inkeep.server.enabled=true` (and `false` otherwise), exactly like the other backends. Images are pulled, not built. A `local_resource` `inkeep-push` (after **both** `inkeep-api` and `travel-agent-api` are ready: push runs MCP tool discovery against the API) runs `scripts/push-agents.sh dev` against a port-forward to the dev Inkeep, so the agents exist after `tilt up` (A31).
   - The Inkeep PVC and DB objects get the same keep/idle handling the Tiltfile gives Parlant and LangGraph (`db_objects`, `idle_volumes`), so switching backends doesn't delete them.
   - `PUBLIC_INKEEP_AGENTS_API_URL` and `INKEEP_AGENTS_MANAGE_UI_URL` are the port-forward URLs in dev, or the manage UI and its auth don't work.
 - **`scripts/push-agents.sh`** gains a target URL argument (dev: the port-forward; prod: the in-chart prod Inkeep after cutover, through a port-forward). It reads the manage bypass secret from the release's Inkeep Secret instead of `inkeep/inkeep-secrets`.
 - **Telemetry for Inkeep** then flows like every other service: `service.namespace` separates dev from prod, and there are no other tenants in it.
-- **Resources:** from the homelab values (api 384Mi/2Gi, ui 256Mi/1Gi, spicedb 128Mi/512Mi, doltgres 256Mi/2Gi). Step 5 checks the dev namespace has room.
+- **Resources:** from the external install's values (api 384Mi/2Gi, ui 256Mi/1Gi, spicedb 128Mi/512Mi, doltgres 256Mi/2Gi). Step 5 checks the dev namespace has room.
 
-### Homelab changes (all out of repo; one list)
+### Cluster-side changes (outside this repo; one list)
+What a cluster's existing stack needs is in `docs/observability.md`; these are the changes made for this deployment.
 1. **Central Alloy `pod_association`** (before rollout step 3): `pod_association { source { from = "resource_attribute", name = "k8s.pod.ip" } }` then `pod_association { source { from = "connection" } }`. Additive: direct senders still match by connection. The OTLP pipelines already exist. The processor's default (no rules) may already check `k8s.pod.ip` before the connection; the explicit rules make it certain, and step 6's gate shows whether they changed anything.
 2. Central Alloy: health-probe span filter, only if step 3 shows the in-app filter misses something.
 3. **Network policy** (prod `travel-agent` namespace): egress from the project Alloy pod (`app.kubernetes.io/component: alloy`) to `monitoring` / `app.kubernetes.io/name: alloy` on TCP 4318 only; egress from the in-chart Inkeep API to `api.anthropic.com:443` (check what the existing policy already grants agent pods); after cutover, remove the egress to the `inkeep` namespace.
 4. *(Removed in rev 11.)*
-5. Grafana: provision the dashboard from this repo's JSON.
-6. **Inkeep cutover:** prod secrets (`scripts/generate-inkeep-secret.sh`, basic-auth Secrets for the `inkeep` and `spicedb` roles), then the values below, then push agents. The homelab Inkeep keeps running untouched until the soak ends (retiring it is a follow-up).
-7. Helm homelab values: `otel.enabled=true`, `otel.upstreamEndpoint`, `otel.environment=prod`; at cutover `inkeep.server.enabled=true`, `inkeep.apiUrl: ''`, storage classes.
+5. Grafana: load the dashboard (since the rollout, the chart ships it as a `grafana_dashboard` ConfigMap with `grafana.dashboard.enabled`).
+6. **Inkeep cutover:** prod secrets (`scripts/inkeep-secrets.sh prod`, which also makes the basic-auth Secrets for the `inkeep` and `spicedb` roles), then the values below, then push agents. The external Inkeep keeps running untouched until the soak ends (retiring it is a follow-up).
+7. Deployment values: `otel.enabled=true`, `otel.upstreamEndpoint`, `otel.environment=prod`; at cutover `inkeep.server.enabled=true`, `inkeep.apiUrl: ''`, storage classes.
 8. *(Merged into item 3.)*
 
 ### Caller identity (API)
@@ -448,7 +449,7 @@ spans {
 - **Combined table:** tokens by type and Tavily credits, joined on `backend`, always three rows.
 - **No USD panels** (rev 11).
 - **Traces link:** Tempo Explore, `resource.service.namespace="$ns"`.
-- **Dashboard as code:** `deploy/grafana/travel-agent-costs.json`, provisioned from the homelab repo (decided rev 4).
+- **Dashboard as code:** `deploy/grafana/travel-agent-costs.json`, provisioned by the cluster's config (decided rev 4; later shipped by the chart as a `grafana_dashboard` ConfigMap).
 
 ### Alternatives considered
 | Option | Pros | Cons | Why not |
@@ -467,7 +468,7 @@ spans {
 | Per-app span-to-metric processors (rev 13) | Stable SDK APIs | One copy per runtime, can't cover Inkeep, Bedrock means code changes | The fallback; dropped as primary in rev 14 (user: standardization) |
 | Token rule in the central Alloy | No new pod | Experimental flag on the shared collector; logic outside this repo | Rev 14: project Alloy instead |
 | Project Alloy writing straight to Tempo/Prometheus | One hop, no central dependency | Repeats the central tagging (and pod/replicaset RBAC) in this namespace | Central tagging kept; `k8s.pod.ip` passthrough is the only contract |
-| Inkeep through an umbrella chart (bjw-s `app-template` as a dependency) | Reuses the homelab's proven values | Parent helpers (`otelEnv`, CNPG connection, CA, labels) don't reach the subchart; `helm dependency build` + `Chart.lock` in Tilt and deploy | Open question 1; drafter leans native templates |
+| Inkeep through an umbrella chart (bjw-s `app-template` as a dependency) | Reuses the external install's proven values | Parent helpers (`otelEnv`, CNPG connection, CA, labels) don't reach the subchart; `helm dependency build` + `Chart.lock` in Tilt and deploy | Open question 1; drafter leans native templates |
 | Per-client rate/daily limits | Fair comparisons | More config and a change in behavior | Follow-up. Side effects documented |
 | `environment` as a metric attribute | Works with any OTLP→Prom setup | Custom attribute on every series | `service.namespace` per env does it for free |
 | Per-backend search tokens / Tavily keys | Hard separation | Secret churn. Enterprise-only reports | User chose the header (rev 4) |
@@ -540,7 +541,7 @@ spans {
     - ⛔ p99 regression ≤ 5%;
     - the span payload size of one Parlant turn.
     - If a bar fails, first switch to an explicit instrumentation allow-list (http, undici, plus `@fastify/otel`). Then consider raising the limit (same values change), or the `traceidratio` sampler.
-  - If nothing arrives: check the project Alloy's logs and `otelcol_exporter_send_failed_*` metrics, then Homelab changes item 1. In prod, check item 3 first (`hubble observe -n travel-agent --verdict DROPPED --to-namespace monitoring`).
+  - If nothing arrives: check the project Alloy's logs and `otelcol_exporter_send_failed_*` metrics, then cluster change 1. In prod, check change 3 first (`hubble observe -n travel-agent --verdict DROPPED --to-namespace monitoring`).
 
 ### 4. Callers send their label
 *(Was step 5; built.)*
@@ -552,9 +553,9 @@ spans {
 - **Decide first:** open question 1 (native templates vs umbrella). The steps below assume native templates.
 - **Pre-check:**
   - Inkeep 0.80.4's env for TLS to Postgres: does `INKEEP_AGENTS_RUN_DATABASE_URL` accept `sslmode=verify-full&sslrootcert=…` (its driver), and does SpiceDB's pgx URI? If not, record it and use the plain-text fallback for those two roles only.
-  - The full secret key set `agents-api` 0.80.4 expects (compare the homelab generator, which lacks `INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET` although `push-agents.sh` reads it).
+  - The full secret key set `agents-api` 0.80.4 expects (compare the external install's generator, which lacks `INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET` although `push-agents.sh` reads it).
   - Whether `agents-api` honors `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SERVICE_NAME` / `OTEL_RESOURCE_ATTRIBUTES`. If it hardcodes `service.name`, the fallback is a `resource` rewrite in the project Alloy (`otelcol.processor.transform` on spans from the `inkeep-api` pod).
-  - Which extensions the run-DB migrations create: the homelab database was made by a superuser `import`, and the chart's cluster has `enableSuperuserAccess: false`. Any needed extension goes into the cluster's `postInitApplicationSQL` or a `Database` `extensions` entry (A29).
+  - Which extensions the run-DB migrations create: the external install's database was made by a superuser `import`, and the chart's cluster has `enableSuperuserAccess: false`. Any needed extension goes into the cluster's `postInitApplicationSQL` or a `Database` `extensions` entry (A29).
   - Whether `agents-api` has an HTTP health path; otherwise use `tcpSocket` probes on 3002.
 - **Files:**
   - `deploy/helm/travel-agent/values.yaml` (`inkeep.server.enabled`, `inkeep.image.tag`, `inkeep.secret`, `inkeep.ui`, `inkeep.spicedb`, `inkeep.doltgres` storage, `inkeep.blobStorage`, resources; the existing `apiUrl`/`tenantId`/`projectId`/`agentId`/`existingSecret` stay);
@@ -578,12 +579,12 @@ spans {
   - chart: drop `TRACELOOP_TRACE_CONTENT`; add `ANTHROPIC_OPEN_TELEMETRY_TRACES_CONTENT_MODE=metadata_only` for langgraph and parlant; `turbo.json` dev `passThroughEnv` gains `"ANTHROPIC_OPEN_TELEMETRY*"` (A27);
   - verify: tests, typecheck and lint pass; a mock-Anthropic run through the preload shows **one** usage span per call (scope `com.anthropic.sdk.typescript`).
 - **Files:** `templates/alloy.yaml` (Deployment, Service, ConfigMap; config as in the Design, without the token rule yet), `values.yaml` (`otel.upstreamEndpoint`, `otel.collector.*`; `otel.endpoint` is renamed, and step 3's helm gate is re-run with the new key), `templates/_helpers.tpl` (`otelEnv` points apps at `<release>-alloy`), `Tiltfile` (`otel.upstreamEndpoint`).
-- **Homelab:** item 1 (central `pod_association`), applied before this step's Tilt checks.
+- **Cluster:** change 1 (central `pod_association`), applied before this step's Tilt checks.
 - **Verify** (Tilt, each backend in turn):
   - ⛔ Spans in Tempo carry `k8s.deployment.name` = `travel-agent-api` / `-langgraph` / `-parlant` / `-inkeep` and the app pod's `k8s.pod.name`, never the collector's.
   - ⛔ The project Alloy's `k8s.pod.ip` equals the app pod's IP (`kubectl get pod -o wide`), confirming Cilium keeps source IPs.
   - ⛔ Each span appears once in Tempo, and `travel_agent_search_requests_total` has one series per label set.
-  - Apps that send to the central Alloy directly (any other homelab app) keep their tags after item 1.
+  - Apps that send to the central Alloy directly (any other app in the cluster) keep their tags after change 1.
   - Then run step 3's deferred Tilt, Tempo, Prometheus and performance gates.
 
 ### 7. Span sources and trace content (Tilt, before prod; blocking)
@@ -646,26 +647,26 @@ spans {
 ## Rollout & rollback
 - **Defaults are off:**
   - `otel.enabled: false`, so no collector, the preload is a no-op, and Parlant runs as today.
-  - `inkeep.server.enabled: false`, so prod keeps using the homelab Inkeep through `inkeep.apiUrl`.
+  - `inkeep.server.enabled: false`, so prod keeps using the external Inkeep through `inkeep.apiUrl`.
   - Old callers show as `unknown`.
 - **Order:**
   1. Merge the Inkeep PR (step 5) first, after its gates pass; then this PR, after the step 3, 6, 7 and 8 gates pass under Tilt.
-  2. Homelab item 1 (central `pod_association`) and item 3 (network policy).
+  2. Cluster change 1 (central `pod_association`) and change 3 (network policy).
   3. `npm run deploy` with `otel.enabled=true`, `otel.upstreamEndpoint` and `environment=prod`, Inkeep still external.
   4. Confirm traces, metrics and attribution, and repeat the step 3 health and shutdown gates on the release. Check `hubble observe -n travel-agent --verdict DROPPED` shows no drops.
   5. **Inkeep cutover** (item 6): prod Inkeep secrets, `inkeep.server.enabled=true`, `inkeep.apiUrl: ''`, deploy, `scripts/push-agents.sh prod`, a smoke chat on the Inkeep backend **that runs a web search and fetches the intake context** (A26), then the step 7 credential search over prod Inkeep spans.
   6. Grafana dashboard (item 5).
-  7. After a soak: retire the homelab Inkeep (follow-up).
+  7. After a soak: retire the external Inkeep (follow-up).
 - **Rollback:**
   - `otel.enabled=false` and redeploy: no collector, the preload is inert and Parlant is back to its local tracer.
   - Token rule alone: remove the `signaltometrics` blocks; traces and other metrics are unaffected.
-  - Inkeep: `inkeep.server.enabled=false` with `inkeep.apiUrl` back on the homelab Inkeep, which was left untouched. The in-chart Inkeep's data stays in its PVC and databases (`retain` reclaim policies).
+  - Inkeep: `inkeep.server.enabled=false` with `inkeep.apiUrl` back on the external Inkeep, which was left untouched. The in-chart Inkeep's data stays in its PVC and databases (`retain` reclaim policies).
   - Central `pod_association`: remove the two blocks; direct senders are unaffected either way.
   - Revert the commit for the rest.
   - **If a credential is found in telemetry:**
     1. Turn OTEL off for that service.
     2. **Rotate the credential.**
-    3. Delete the affected Tempo blocks and Loki streams if the homelab setup allows. Otherwise record that they stay until retention ends.
+    3. Delete the affected Tempo blocks and Loki streams if the storage setup allows. Otherwise record that they stay until retention ends.
 
 ## Security considerations
 - **Traces (and Parlant's stdout → Loki) can carry guest data.**
@@ -681,19 +682,19 @@ spans {
 - **No Anthropic admin key anywhere** (rev 11): dropping the Admin API removes the plan's highest-privilege secret.
 - **Trace propagation:**
   - `OTEL_PROPAGATORS=tracecontext` (no baggage), so client-supplied baggage isn't propagated or turned into attributes.
-  - Incoming `traceparent` from the internet is still honored. A client can opt its own requests out of sampling, or join forged trace IDs. Accepted for the homelab; stripping it at the edge is a follow-up.
+  - Incoming `traceparent` from the internet is still honored. A client can opt its own requests out of sampling, or join forged trace IDs. Accepted for this deployment; stripping it at the edge is a follow-up.
   - Outbound `traceparent` to Tavily, Anthropic and Voyage leaks random trace IDs only. Accepted.
 - **`x-search-client` is an allow-listed label** behind the token guard.
-- **OTLP export is in-cluster and unauthenticated.** Apps talk only to the project Alloy inside their namespace; one narrow rule lets the collector pod reach `monitoring/alloy:4318` (homelab item 3).
-- **`k8s.pod.ip` is client-supplied to the central Alloy.** Any in-cluster OTLP sender could set it and have its telemetry tagged as another pod's. That's no worse than today's unauthenticated OTLP endpoint (a sender can already set any resource attribute); accepted for the homelab.
+- **OTLP export is in-cluster and unauthenticated.** Apps talk only to the project Alloy inside their namespace; one narrow rule lets the collector pod reach `monitoring/alloy:4318` (cluster change 3).
+- **`k8s.pod.ip` is client-supplied to the central Alloy.** Any in-cluster OTLP sender could set it and have its telemetry tagged as another pod's. That's no worse than today's unauthenticated OTLP endpoint (a sender can already set any resource attribute); accepted for this deployment.
 - **Project Alloy:** no Kubernetes API access (passthrough mode needs none), runs as non-root with a read-only root filesystem, no ingress. The experimental flag is scoped to it.
-- **Inkeep secrets move into this namespace** (rev 14): auth, JWT and bypass secrets, admin login and DB passwords sit in the release's Inkeep Secret. Dev values are generated once into the gitignored `.tilt/inkeep-dev.env` (never committed; `.gitignore` gains `.tilt/`). Prod's come from `scripts/generate-inkeep-secret.sh`, which writes a gitignored file to `kubectl apply`, as the homelab generator does. The manage UI has no ingress by default.
+- **Inkeep secrets move into this namespace** (rev 14): auth, JWT and bypass secrets, admin login and DB passwords sit in the release's Inkeep Secret. Dev values are generated once into the gitignored `.tilt/inkeep-dev.env` (never committed; `.gitignore` gains `.tilt/`). Prod's come from `scripts/generate-inkeep-secret.sh`, which writes a gitignored file to `kubectl apply`, as the external install's generator does. The manage UI has no ingress by default.
 - **Inkeep's databases** get their own roles with access to only their own database (the chart's `rejectOthers` isolation), over verified TLS, or the recorded in-namespace plain-text fallback.
 - **Postgres spans:** `instrumentation-pg` masks credentials in `db.connection_string` and, with `enhancedDatabaseReporting` off, records SQL text but not parameter values. Both are recorded in step 3 and backed by the step 7 search for the DB role passwords.
 - **New deps:**
   - the official `@opentelemetry/*` packages, plus `@fastify/otel` from the Fastify org;
   - no LLM instrumentation packages (rev 14: the OpenLLMetry packages from rev 13 are removed in step 8);
-  - images: `grafana/alloy:v1.21.3`, `inkeep/agents-api|agents-manage-ui|agents-migrate:0.80.4`, `authzed/spicedb:v1.49.2`, `dolthub/doltgresql:0.56.7`, all pinned (the same versions the homelab runs);
+  - images: `grafana/alloy:v1.21.3`, `inkeep/agents-api|agents-manage-ui|agents-migrate:0.80.4`, `authzed/spicedb:v1.49.2`, `dolthub/doltgresql:0.56.7`, all pinned (the same versions as the external install);
   - caret ranges, installed from a reviewed lockfile with `npm ci`, in their own commit;
   - one `@opentelemetry/api` copy.
 - **Parlant patch:** it only silences a console exporter. It touches no data path.
@@ -710,7 +711,7 @@ spans {
   - **Node:** an HTTP server span, plus the `@fastify/otel` route and hook/handler spans, plus client spans. Roughly 5–15 per request, more for chat turns. `nestjs-core` is off, so those spans don't overlap.
   - **Postgres:** a LangGraph turn adds a `pg.query` (and `pg-pool.connect`) span per checkpoint and pending write, likely dozens per turn; API intake routes add a few. `requireParentSpan: true` keeps boot queries out. Step 3 records the per-turn count; if it dominates, dropping `pg` is the first lever, ahead of the allow-list.
   - **Parlant:** the step 3 measurement records its turn payload size.
-  - **Sampling:** `parentbased_always_on` for the homelab, with `parentbased_traceidratio` as the lever.
+  - **Sampling:** `parentbased_always_on` by default, with `parentbased_traceidratio` as the lever.
 - **Export:** batched and off the request path. Every service pushes metrics every 15 s (rev 11): about 4× Node's default push rate, a fifth of Parlant's default.
 - **Health probes:** filtered in the Node preload (gated in step 3). Parlant `/healthz` is recorded, and the Alloy filter is the fallback.
 - **Parlant console spans:** the `otel_quiet` patch stops each span also being written to stdout and shipped to Loki. Step 3 confirms Parlant's log volume doesn't grow with OTEL on.
@@ -731,16 +732,16 @@ spans {
 | The ESM hook doesn't take effect, or the hook API differs on Node 26 | Medium | Missing http/undici/fastify spans | Dynamic imports after registration. Step 3 pre-check and the ⛔ client/route span gates (passed locally) |
 | A dev command can't load the preload (Nest `--exec`) | Low (checked) | No dev telemetry | Fallback `start:dev` variant. ⛔ Tilt boot gate |
 | Shutdown ordering cuts off the app or the flush | Medium | Unfinished pool close or chat streams, lost last batch | No listener in the preload. `flushTelemetry()` last in each app's shutdown. ⛔ gates passed locally |
-| Prod network policy blocks OTLP or Inkeep's Anthropic calls | High (until item 3) | No prod data, or a broken Inkeep backend | Homelab item 3 before rollout. `hubble observe` in rollout step 4 |
+| Prod network policy blocks OTLP or Inkeep's Anthropic calls | High (until item 3) | No prod data, or a broken Inkeep backend | Cluster change 3 before rollout. `hubble observe` in rollout step 4 |
 | `k8sattributes` tags spans with the collector's pod | High without item 1 | Wrong deployment/pod labels | Passthrough + central `pod_association`. ⛔ step 6 gate |
 | A NAT or proxy hides the app's source IP | Low | Wrong `k8s.pod.ip` | ⛔ step 6 IP check |
 | `signaltometrics` (experimental) breaks on an Alloy upgrade | Medium | Token metric stops; traces unaffected | Pinned image; fixture test in CI-able form (step 8); per-app processor fallback |
 | Token rule double-counts or misses (two spans per call, wrong attribute) | Medium | Wrong token totals | Step 7 records one usage span per call per backend; step 8 fixture and Tilt sum checks |
 | Backends disagree on what `input` means | Medium | Skewed comparison | Rule normalizes per source to include cache; step 7 records each source's semantics |
 | Inkeep exposes no token usage | Low (constants say it does) | Inkeep missing from the comparison | Step 7 records it; documented as a framework finding |
-| Inkeep in the chart differs from the homelab install (secrets, env, TLS) | Medium | Inkeep backend broken in dev | Step 5 pre-checks and ⛔ boot/push/chat gates; homelab values as the reference |
+| Inkeep in the chart differs from the external install (secrets, env, TLS) | Medium | Inkeep backend broken in dev | Step 5 pre-checks and ⛔ boot/push/chat gates; the external install's values as the reference |
 | Dev Inkeep secrets rotate on every `tilt up` | High if missed | Sign-outs, broken JWTs | Generated once into `.tilt/inkeep-dev.env`; ⛔ step 5 gate |
-| Prod Inkeep cutover loses history | Certain (by choice) | Old conversations not in the new Inkeep | Open question 2; homelab Inkeep kept until retired |
+| Prod Inkeep cutover loses history | Certain (by choice) | Old conversations not in the new Inkeep | Open question 2; external Inkeep kept until retired |
 | pg spans inflate volume, or record values | Medium | Tempo/RSS cost; guest data in spans | `requireParentSpan`, `enhancedDatabaseReporting` off. Per-turn count recorded. Step 7 DB-password search |
 | Memory or startup goes past the pod budget | Medium | OOM kills or failed probes | Step 3 load-based gates (cold start passed). Allow-list fallback |
 | The health filter misses (path or signature) | Medium | Span noise | ⛔ Gate in step 3 (passed locally). Alloy filter fallback |
@@ -753,12 +754,12 @@ spans {
 | Context lost across Parlant and Inkeep | High | Disconnected traces | Expected and recorded as a finding |
 
 ## Open questions
-None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover without migrating the homelab Inkeep's data.
+None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover without migrating the external Inkeep's data.
 
 ## Follow-ups
 - Optional USD estimates from tokens (a price-per-model table as dashboard variables), if wanted after the Bedrock move.
 - Remove the remaining compose files and docs when compose support is dropped (separate change).
-- **Retire the homelab Inkeep** after the prod cutover soak (its namespace, CNPG cluster, Doltgres PVC, secrets and the `inkeep` egress rule).
+- **Retire the external Inkeep** after the prod cutover soak (its namespace, CNPG cluster, Doltgres PVC, secrets and the `inkeep` egress rule).
 - **Tail sampling** in the project Alloy, after the token rule (needs trace-ID routing if the collector ever has more than one replica).
 - **A token rule for Bedrock** (AWS SDK spans) when the provider moves.
 - `opentelemetry-instrument` or httpx instrumentation for Parlant, so its traces join the api's.
@@ -778,7 +779,7 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
   1. a self-reported `x-search-client` header, with Inkeep identified by the MCP route;
   2. a per-backend search cache;
   3. the Infinity datasource for Anthropic cost, with restricted URLs, and the admin key revoked after the evaluation;
-  4. the homelab repo provisions the Grafana, Alloy and Inkeep pieces, and the dashboard JSON's source of truth is here.
+  4. the cluster's config provisions the Grafana, Alloy and Inkeep pieces, and the dashboard JSON's source of truth is here.
 - rev 5: Guest prompt/completion content in traces is an **accepted risk** until guardrails, because telemetry stays in-cluster (user). The drafter keeps the credential-leak check as a blocker.
 - rev 6: Add `@fastify/otel` now (user). That needs a preload, and health filtering moves into it (drafter).
 - rev 7: Keep the two search counters. Scope is basic instrumentation plus cost metrics, with no hand-written spans (user).
@@ -845,27 +846,27 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
   - the e2e header cases and the required `client`;
   - the Tavily pre-check;
   - the rotation checklist;
-  - a single homelab change list;
+  - a single list of cluster-side changes;
   - stale text fixed.
   - Status is now in-review.
-- rev 9: open question 6 resolved (local patch), and the Loki extension of the accepted risk confirmed. Step 5 now always adds `otel_quiet`. The Alloy-logs drop stage is removed from the homelab list.
+- rev 9: open question 6 resolved (local patch), and the Loki extension of the accepted risk confirmed. Step 5 now always adds `otel_quiet`. The Alloy-logs drop stage is removed from the cluster-side list.
   - Also added the `turbo.json` `passThroughEnv` entries (`OTEL_*`, `TAVILY_PROJECT_PREFIX`) to step 3. This is a drafter catch from project memory: Turbo's strict env mode would drop them in the Tilt dev pods.
 - rev 10: applied the rev 9 architecture + security re-review, prompted by the CNPG Postgres move (699cc8a):
   - shutdown redesign: no preload listener, `flushTelemetry()` called by each app (A10);
-  - homelab item 8, the network-policy egress rule, plus `hubble` checks (A11, S2);
+  - cluster change 8, the network-policy egress rule, plus `hubble` checks (A11, S2);
   - Postgres context, pg instrumentation config, pg span gates, DB passwords in the credential search, a checkpoint write and a DB failure in the test window (A12, S1);
   - DB-attached runtime gates and the cold-start delta bar (A13);
   - per-workspace `npm ls`, `@types/pg` and all-workspace typecheck (A14);
   - stale context fixed: Recreate, LangGraph's dev script and signal handling (A15).
 - rev 11: applied the user's three artifact comments.
-  - Tokens replace USD: OpenLLMetry Anthropic instrumentation for LangGraph (plus the `GenAiTokenMetrics` processor) and Parlant; new step 6; step 7 is a Prometheus-only dashboard. Removed the Admin API, Infinity, the admin key, its gates and risks, and homelab item 4.
+  - Tokens replace USD: OpenLLMetry Anthropic instrumentation for LangGraph (plus the `GenAiTokenMetrics` processor) and Parlant; new step 6; step 7 is a Prometheus-only dashboard. Removed the Admin API, Infinity, the admin key, its gates and risks, and cluster change 4.
   - Per-backend Anthropic keys removed (old step 6), raised as open question 1.
   - Docker compose: no changes anywhere; made explicit in Summary, Non-goals and Alternatives.
   - Tavily USD estimate dropped too, for one consistent rule (credits only).
   - Grafana sign-in check moved to step 4 as record-only, since no admin key depends on it now.
   - Metric export interval is 15 s for every service, set in the shared `otelEnv` block (user comment).
   - Status stays in-review; the token design hasn't been reviewed.
-- rev 12: open question 1 resolved (per-backend keys dropped). Follow-up added for a self-contained Inkeep under Tilt; step 4's Inkeep credential search runs under Tilt when one exists, else against the homelab.
+- rev 12: open question 1 resolved (per-backend keys dropped). Follow-up added for a self-contained Inkeep under Tilt; step 4's Inkeep credential search runs under Tilt when one exists, else against the external Inkeep.
 - rev 13: applied the rev 12 architecture + security review: explicit span processors (A16), lazy meter (A17), manual instrumentation and beta coverage (A18), one meaning of `input` (A19), one Tilt run per backend (A20), `travel_agent/telemetry.py` and the right `main.py` path (A21), LangGraph-only instrumentation (A22, S3), content-off default in code (S2), credential search after step 6 and in the merge gate (S1).
 - rev 13: **approved** by the user (2026-11-26). No open questions or critical findings.
 
@@ -891,7 +892,7 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
 - **Step 9 (dashboard):**
   - Added (user): `otelcol.processor.transform "genai"` in the project Alloy, before the token rule, fills `gen_ai.provider.name` from `gen_ai.system` (`^anthropic` → `anthropic`), so Inkeep's series carry the provider like the others. The fixture test now checks the provider label on every series; under Tilt Inkeep's series show `gen_ai_provider_name="anthropic"`.
   - `deploy/grafana/travel-agent-costs.json` (uid `travel-agent-costs`): a how-to-read text panel (with a Tempo link for `$ns`), the cost table (one row per backend, zeros included: input/output tokens, Tavily credits, searches), tokens by backend and type, tokens over time by backend and model, Tavily credits over time, searches by outcome, cache hit ratio. Variables `ds` (Prometheus) and `ns`. `deploy/grafana/README.md` lists the panels, sources and caveats.
-  - Every query was run against the dev data through Prometheus. **Not done:** importing the dashboard into Grafana (homelab item 5) to look at it rendered; the provisioning validator only works with a Grafana git-sync repository.
+  - Every query was run against the dev data through Prometheus. **Not done:** importing the dashboard into Grafana (cluster change 5) to look at it rendered; the provisioning validator only works with a Grafana git-sync repository.
   - Range totals use `increase()`, which extrapolates at the edges (Parlant: 64,038 over 3 h against the exact 59,534 since the collector started); the panels say so and round.
 - **Step 10 (docs):** `docs/agent-frameworks.md`: "Running it" (Inkeep in the chart, ports, dev secrets, the OTEL switch, `HOMELAB_DIR` for worktrees), an Observability row in the comparison table, the Storage row updated, a **Cost** section (how cost is measured per backend, setup checklist, reading the numbers, moving to another provider) and telemetry findings. `README.md`: backend selection, Inkeep's UI port, the OTEL switch. Prettier applied to both (the doc wasn't Prettier-clean before; the reflow is in the tables).
 - **Step 7, DB connection failure (2026-11-28):** terminating the `api` and `inkeep` roles' sessions every 0.3 s for 15 s (28 sessions) caused no request failures: the pools replaced idle connections, so nothing failed in flight. Briefly setting `CONNECTION LIMIT 0` on the dev `api` role (then back to -1) made 3 identity requests fail with 500 inside traced requests: the `pg.connect` and `pg-pool.connect` spans carry `too many connections for role "api"`, `db.namespace`, `server.address` and `server.port`, and the exception event says `PostgreSQL error … (code: 53300)`. ⛔ No password or connection string anywhere.
@@ -934,11 +935,11 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
 - **Step 6:**
   - `templates/alloy.yaml` (ConfigMap, Deployment with `Recreate`, Service, optional ServiceMonitor), `otel.upstreamEndpoint` (was `otel.endpoint`) and `otel.collector.*`; every app's OTEL endpoint is now `<release>-alloy:4318`, Inkeep included (`travel-agent-inkeep`). The stability flag is left off until step 8 needs it. The config passes `alloy fmt` and runs clean in a local v1.21.3 container. Non-root (uid 473), read-only root filesystem, `emptyDir` for storage and `/tmp`.
   - Under `tilt ci -- --chat-backend=inkeep`: ⛔ spans in Tempo carry `k8s.deployment.name` `travel-agent-api` and `travel-agent-inkeep-api`, never `travel-agent-alloy`; ⛔ their `k8s.pod.ip` values (10.0.4.98, 10.0.4.88) are the app pods', not the collector's (10.0.4.24), so Cilium keeps source IPs. Inkeep's `OTEL_SERVICE_NAME` overrides its hardcoded `inkeep-agents-api`, so no resource rewrite is needed. Metrics arrive as `job=travel-agent-dev/travel-agent-api` and `…/travel-agent-inkeep`.
-  - **Finding: homelab item 1 isn't needed for correctness.** The central `k8sattributes`, with no `pod_association` rules, already prefers the `k8s.pod.ip` resource attribute (as the rev 14 review suspected). The explicit rules remain a recommended homelab change, so the behavior doesn't depend on a default.
+  - **Finding: cluster change 1 isn't needed for correctness.** The central `k8sattributes`, with no `pod_association` rules, already prefers the `k8s.pod.ip` resource attribute (as the rev 14 review suspected). The explicit rules remain a recommended cluster-side change, so the behavior doesn't depend on a default.
   - Still to run: step 3's deferred Tilt/performance gates and the per-backend runs (LangGraph, Parlant), which come with step 7.
 - **Step 5 (Inkeep in the chart), branch `feat/inkeep-in-chart` from `main`, worktree `.claude/worktrees/inkeep-in-chart`:**
   - Pre-checks (images 0.80.4): `agents-api` serves `GET /health` (HTTP probes kept); it turns OTEL on when `OTEL_EXPORTER_OTLP_ENDPOINT` is set, exports traces only, hardcodes `service.name=inkeep-agents-api` in its resource (whether `OTEL_SERVICE_NAME` wins is checked in step 7; the Alloy rewrite is the fallback), and adds a `BaggageSpanProcessor` that copies all baggage into span attributes. The DB driver is `pg` 8.2x, so `sslmode=verify-full&sslrootcert=…` in the URL works; no migration creates an extension.
-  - Secret keys beyond the homelab generator: `INKEEP_ANON_JWT_SECRET` (required in production), `INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET`, and `INKEEP_AGENTS_JWT_SIGNING_SECRET` (read in `agents-core`; found at the first chat turn, which failed with "Failed to generate service token" until it was added).
+  - Secret keys beyond the external install's generator: `INKEEP_ANON_JWT_SECRET` (required in production), `INKEEP_AGENTS_MANAGE_API_BYPASS_SECRET`, and `INKEEP_AGENTS_JWT_SIGNING_SECRET` (read in `agents-core`; found at the first chat turn, which failed with "Failed to generate service token" until it was added).
   - Built: `templates/inkeep.yaml` (one file: api with `wait-db` + `migrate` inits, ui, SpiceDB with `wait-db` + `migrate head`, Doltgres StatefulSet), `inkeep.server.*` values with `keepDatabases`, the helper's `initContainers`/`probe` override and `postgresConnection` `urlName`/`query`, the `postgres.enabled` and `inkeep.server.secret` guards, API wiring, `scripts/inkeep-secrets.sh` (`generate` for Tilt, `prod` writes Secrets from stdin only), Tilt resources and `inkeep-push`, `push-agents.sh` targets.
   - **Deviation:** the API template does **not** fail when `chat.backend=inkeep` and neither `inkeep.server.enabled` nor `inkeep.apiUrl` is set: that's the chart's default values, and the existing behavior (chat returns 503) is kept so default renders stay valid.
   - **Deviation (added):** `wait-db` init containers (the cluster's postgresql image, `psql` loop), because CNPG creates roles asynchronously and SpiceDB's migration failed on the first run; and a `travel-agent-inkeep-config` Tilt resource that deploys the Secret and DB objects before any Inkeep pod.
@@ -954,7 +955,7 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
   - Central `k8sattributes` keeps doing the tagging, matching on `k8s.pod.ip` stamped by the project Alloy (passthrough).
   - Inkeep is deployed by this chart (`inkeep.server.enabled`, Tilt `--chat-backend=inkeep`), with its run DB and SpiceDB datastore on the release's CNPG cluster and a Tilt-generated, stable dev secret.
   - Steps renumbered: 4 callers (built), 5 Inkeep in the chart, 6 project collector, 7 span sources and trace content (blocking), 8 token rule, 9 dashboard, 10 docs (with a per-backend "how cost is measured" table).
-  - Homelab list rewritten (central `pod_association`, network policy, Inkeep cutover).
+  - Cluster-side list rewritten (central `pod_association`, network policy, Inkeep cutover).
   - Status back to in-review; base commit unchanged.
 - rev 15: applied the rev 14 architecture review: rev 13 removal moved to step 6a before any gate (A23); project Alloy `Recreate` + storage `emptyDir` (A24); Inkeep as its own PR, merged first (A25); prod Inkeep secret copies `SEARCH_API_TOKEN`/`INTAKE_API_TOKEN` and the smoke turn searches (A26); `ANTHROPIC_OPEN_TELEMETRY*` passthrough (A27); Parlant's scope and `input` filled in, wider fixture (A28); helper probe override, URL params, `postgres.enabled` guard, extension pre-check, service-name fallback (A29); `inkeep.server.*` values (A30); Tilt push deps, keep/idle handling, port-forward URLs (A31); stale text (A32).
 - rev 15: **approved** by the user (2026-11-26), with Q1 and Q2 answered as recommended. Status back to implementing; base unchanged. The Inkeep PR (step 5) is built on its own branch, `feat/inkeep-in-chart`, from `main`.
@@ -964,10 +965,10 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
 - Open items (rollout or out of repo, for the user to accept):
   1. **RSS on the runtime images** (step 3 bar): dev images were already over 70% with OTEL off; LangGraph reached 87% of 512 MiB with OTEL on in dev. Measure in rollout step 4; raise the limit or use the allow-list fallback if needed.
   2. **API autocannon p99 run** and an **exact-value secret search**: not run, because the permission check blocked reading tokens from `.env`/Secrets; the pattern-based credential search passed.
-  3. **Dashboard not yet viewed in Grafana:** its queries were run against Prometheus; provisioning is homelab item 5.
-  4. **Homelab changes:** item 3 (prod network policy: collector → central Alloy on 4318; Inkeep → Anthropic) before rollout; item 1 (explicit `pod_association`) is optional, since the central default already matches on `k8s.pod.ip`; item 5 (dashboard); item 6 (prod Inkeep cutover).
+  3. **Dashboard not yet viewed in Grafana:** its queries were run against Prometheus; provisioning is cluster change 5.
+  4. **Cluster-side changes:** change 3 (prod network policy: collector → central Alloy on 4318; Inkeep → Anthropic) before rollout; item 1 (explicit `pod_association`) is optional, since the central default already matches on `k8s.pod.ip`; item 5 (dashboard); item 6 (prod Inkeep cutover).
   5. **First-sample undercount** on new token series: accepted as small unless the user wants Prometheus' created-timestamp zero injection (a central change).
-- User decisions on the open items (2026-11-28): (1) monitor during the rollout, with an agent prompt (in the rollout plan's appendix); (2) skipped, the pattern-based checks are enough; (3) the dashboard was viewed in Grafana and works; (4) the homelab changes and prod rollout get their own plan, kept outside the repo (it's specific to the homelab cluster); (5) the first-sample undercount is accepted.
+- User decisions on the open items (2026-11-28): (1) monitor during the rollout, with an agent prompt (in the rollout plan's appendix); (2) skipped, the pattern-based checks are enough; (3) the dashboard was viewed in Grafana and works; (4) the cluster-side changes and the prod rollout get their own plan, kept outside the repo (it's specific to one cluster); (5) the first-sample undercount is accepted.
 - implemented (2026-11-28): all steps built and verified; the open items accepted or moved to the (out-of-repo) rollout plan.
 
 ## Review log
@@ -988,8 +989,8 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
 - Recommendation:
   - Remove `/workspaces` from the allowed URLs and allow only the exact `https://api.anthropic.com/v1/organizations/cost_report` URL.
   - Map workspace IDs to backend names with a static value mapping in the dashboard JSON. Workspace IDs are not secret, and there are only three.
-  - In step 7, check how the installed Infinity version matches allowed URLs and whether it allows POST, and record the result. Confirm that the homelab Grafana has anonymous access off and no Viewer accounts the user doesn't control. If either is untrue, go back to the exporter CronJob alternative.
-  - Make sure the datasource provisioning file in the homelab repo takes the key from a secret or env reference, never a literal value.
+  - In step 7, check how the installed Infinity version matches allowed URLs and whether it allows POST, and record the result. Confirm that the Grafana has anonymous access off and no Viewer accounts the user doesn't control. If either is untrue, go back to the exporter CronJob alternative.
+  - Make sure the datasource provisioning file in the cluster config repo takes the key from a secret or env reference, never a literal value.
 
 **S2 [medium] The credential-leak check is a one-trace spot check, runs after prod is enabled, and has no rotation step**
 - Where: Implementation step 4 ("Inspect one Inkeep, one Parlant and one LangGraph trace"), Rollout & rollback order (step 1 enables prod OTEL, step 2 runs the check), Security considerations "No secrets in telemetry (blocking)".
@@ -1024,9 +1025,9 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
   - Keep `@opentelemetry/sdk-node`, `auto-instrumentations-node` and `instrumentation` on the same release train, so the lockfile doesn't pull in duplicate copies of the API.
 
 **S5 [low] Inkeep's OTEL may export other tenants' or projects' data under a travel-agent label**
-- Where: Design > "Inkeep (homelab, out of repo)", which sets the same `OTEL_RESOURCE_ATTRIBUTES` (`service.namespace=travel-agent`) on the shared homelab `agents-api`.
-- Issue: Memory notes the user evaluates Inkeep for other uses. If the homelab `agents-api` serves other projects, turning on its built-in OTEL sends their prompts and tool data to Tempo too. Their traces would be labelled as travel-agent, which widens the accepted guest-data risk beyond this app.
-- Recommendation: In step 4, record whether the homelab Inkeep serves other projects. If it does, give it its own `service.namespace` (for example `inkeep`), and note in `docs/agent-frameworks.md` that the accepted risk covers all of its tenants.
+- Where: Design > "Inkeep (cluster, out of repo)", which sets the same `OTEL_RESOURCE_ATTRIBUTES` (`service.namespace=travel-agent`) on the shared cluster `agents-api`.
+- Issue: Memory notes the user evaluates Inkeep for other uses. If the cluster `agents-api` serves other projects, turning on its built-in OTEL sends their prompts and tool data to Tempo too. Their traces would be labelled as travel-agent, which widens the accepted guest-data risk beyond this app.
+- Recommendation: In step 4, record whether the external Inkeep serves other projects. If it does, give it its own `service.namespace` (for example `inkeep`), and note in `docs/agent-frameworks.md` that the accepted risk covers all of its tenants.
 
 Notes:
 - Claims I confirmed in the code:
@@ -1040,10 +1041,10 @@ Notes:
 - I did not re-raise the guest-text-in-traces risk the user accepted in rev 5. One observation for the user: the "stays in-cluster" reasoning really depends on who can sign in to Grafana, since Tempo is readable through Explore. The same Grafana access check in S1 bounds that exposure too.
 - I couldn't verify these, which the plan already defers to steps 3, 4 and 7:
   - Infinity's exact allowed-URL matching and HTTP method rules in the installed version;
-  - the homelab Grafana's auth and anonymous-access settings;
+  - the Grafana's auth and anonymous-access settings;
   - what Inkeep's and Parlant's tracers actually record.
 - The Review log was empty, so there were no earlier findings to reconcile.
-- Plan file: /home/nronnei/projects/ts/travel-agent/docs/plans/2026-11-22-per-backend-cost-attribution.md
+- Plan file: docs/plans/2026-11-22-per-backend-cost-attribution.md
 
 #### Architecture review (rev 7) — verdict: BLOCK
 
@@ -1075,14 +1076,14 @@ The search-attribution half (shared caller type, the `SearchService`/provider ch
   - If Parlant's spans carry prompt or completion text, guest data lands in a second store with its own retention. The rev 5 accepted risk was argued for Tempo only.
 - Recommendation: Add this to Context, Security and Risks.
   - In step 4, check the stdout volume and content alongside the span check.
-  - Decide on a mitigation: an alloy-logs drop stage for Parlant's span-JSON lines (homelab), or a small local patch next to the existing Parlant patch. Get the user's sign-off, since a patch touches framework code.
+  - Decide on a mitigation: an alloy-logs drop stage for Parlant's span-JSON lines (cluster), or a small local patch next to the existing Parlant patch. Get the user's sign-off, since a patch touches framework code.
   - At minimum, extend the rev 5 accepted-risk note to cover Loki.
 
 **A4 [medium] `deployment_environment_name` won't be a label on the metric series by default**
 - Where: Grafana › Tavily, "all filtered by `$env` on `deployment_environment_name`"; Design table (`OTEL_RESOURCE_ATTRIBUTES`).
 - Issue: In OTLP → Prometheus translation, resource attributes other than `service.name`, `service.namespace` and `service.instance.id` go to `target_info`, not onto each series. That holds for `otelcol.exporter.prometheus` and for Prometheus' own OTLP receiver unless `promote_resource_attributes` is set. Dev (`travel-agent-dev`) and prod would then mix in every panel, or the `$env` filter returns nothing.
 - Recommendation: Pick one approach:
-  - Promote `deployment.environment.name` in Alloy (a homelab change; list it with the other homelab items).
+  - Promote `deployment.environment.name` in Alloy (a cluster change; list it with the other cluster changes).
   - Add `environment` as a metric attribute on the two counters, read from config.
   - Filter on `job`/`service_namespace`, plus a join to `target_info`.
 
@@ -1124,7 +1125,7 @@ Notes:
 - **Checked against the code and correct:** Parlant reads `OTEL_EXPORTER_OTLP_PROTOCOL` (default `grpc`, so the helper's `http/protobuf` matters), `OTEL_SERVICE_NAME`, and `OTEL_RESOURCE_ATTRIBUTES` (through `Resource.create`). The chart's `merge` order gives `api.env` and the others precedence, as the plan says. The API, LangGraph and the Anthropic SDK all use global `fetch` for outbound calls, so undici instrumentation will carry `traceparent`.
 - **Expect these traces not to link:** Parlant's outbound search uses httpx, which isn't instrumented, and its `fresh_trace` generates its own trace IDs. So Parlant traces will very likely not join the api trace. That is already covered as a finding and follow-up, but the step 3/4 and test-plan expectation of "one connected trace per turn per backend" should allow for it.
 - **Couldn't check here:** the `@fastify/otel` export shape and `ignorePaths` signature, Inkeep's OTEL env names, Alloy's pipelines, and the current Anthropic Admin API response shape.
-- **Files:** /home/nronnei/projects/ts/travel-agent/docs/plans/2026-11-22-per-backend-cost-attribution.md, /home/nronnei/projects/ts/travel-agent/Tiltfile, /home/nronnei/projects/ts/travel-agent/apps/api/Dockerfile, /home/nronnei/projects/ts/travel-agent/apps/langgraph/Dockerfile, /home/nronnei/projects/ts/travel-agent/apps/langgraph/src/main.ts, /home/nronnei/projects/ts/travel-agent/apps/parlant/.venv/lib/python3.12/site-packages/parlant/adapters/tracing/opentelemetry.py
+- **Files:** docs/plans/2026-11-22-per-backend-cost-attribution.md, Tiltfile, apps/api/Dockerfile, apps/langgraph/Dockerfile, apps/langgraph/src/main.ts, apps/parlant/.venv/lib/python3.12/site-packages/parlant/adapters/tracing/opentelemetry.py
 
 #### Risk review (rev 7) — verdict: APPROVE WITH CHANGES
 
@@ -1211,7 +1212,7 @@ Notes:
 - Recommendation:
   - Add a before/after check with OTEL off and on: p50/p99 and time-to-first-byte of one chat stream, plus a simple `autocannon` run against a cheap authenticated endpoint. Do not use `/api/health`, because it is filtered.
   - Record the pass bar, for example under 5% p99 regression.
-  - Keep `parentbased_always_on` for the homelab, but note `parentbased_traceidratio` as the lever if Tempo or CPU is stressed.
+  - Keep `parentbased_always_on` by default, but note `parentbased_traceidratio` as the lever if Tempo or CPU is stressed.
   - In step 4, also record the span payload size of one Parlant turn.
 
 **P3 [medium] The per-backend cache is a deliberate cost increase, and the daily cap is shared across backends**
@@ -1241,7 +1242,7 @@ Notes:
 - Recommendation: step 3 already checks that `/api/health` prints no span. Add the same check for the LangGraph probe path and for whichever path each chart `livenessProbe` and `readinessProbe` actually uses.
 
 Notes:
-- No performance budget exists in the plan, CLAUDE.md or CI that I found. I judged against reasonable expectations for a homelab app: small per-request overhead, memory under the pod limits, and no added latency on chat streaming.
+- No performance budget exists in the plan, CLAUDE.md or CI that I found. I judged against reasonable expectations for a cluster app: small per-request overhead, memory under the pod limits, and no added latency on chat streaming.
 - The design is otherwise sound. Metrics and trace export are batched and off the request path. OTEL is off by default, and rollback removes `NODE_OPTIONS`. The Tavily changes add one header and one response field per search. The counters are low-cardinality.
 - Not verified:
   - the `@fastify/otel` span counts per request
@@ -1307,14 +1308,14 @@ The search-attribution half still fits the code as written: `search.service.ts:8
   - Update Context line 105 and the Risks row.
   - Add a gate: on `docker stop` with a DB attached, LangGraph logs a clean pool close and Postgres logs no "terminating connection".
 
-**A11 [high] The homelab `travel-agent` namespace's CiliumNetworkPolicy blocks OTLP egress to `monitoring/alloy`**
-- Where: Homelab changes list (items 1–7) and Rollout step 3–4. Out of repo: `/home/nronnei/projects/homelab/apps/travel-agent/network-policy.yaml`. Its egress allows only the same namespace, kube-dns, `inkeep` api:3002 and `api.tavily.com:443`.
+**A11 [high] The prod `travel-agent` namespace's CiliumNetworkPolicy blocks OTLP egress to `monitoring/alloy`**
+- Where: cluster-side changes list (items 1–7) and Rollout step 3–4. Out of repo: the cluster config repo's `apps/travel-agent/network-policy.yaml`. Its egress allows only the same namespace, kube-dns, `inkeep` api:3002 and `api.tavily.com:443`.
 - Issue:
   - Prod pods can't reach `alloy.monitoring.svc:4318`. Export fails silently and is retried by the batch processor.
   - Tilt runs in `travel-agent-dev`, which has no policy, so every step 3/4 gate passes. Then prod shows no data at rollout step 4.
   - The CNPG change showed this namespace needs explicit policy entries (memory: `postgres-network-policy.yaml`).
 - Recommendation:
-  - Add a Homelab item: an egress rule to `monitoring` / `app.kubernetes.io/name: alloy` on TCP 4318.
+  - Add a cluster change: an egress rule to `monitoring` / `app.kubernetes.io/name: alloy` on TCP 4318.
   - Check whether Alloy has an ingress policy, and whether the `inkeep` namespace restricts egress too (for item 6).
   - Put it ahead of rollout step 3.
   - Add `hubble observe -n travel-agent --verdict DROPPED` to the rollout step 4 check.
@@ -1362,7 +1363,7 @@ The search-attribution half still fits the code as written: `search.service.ts:8
 
 Notes:
 - I verified against the code: the search files and signatures, the MCP `server()` shape, `search_client.py` (headers only when a token exists), and `_helpers.tpl`. On the helpers, `$env` is still a dict merged with `values.env`, and secretEnv entries come first, so `otelEnv` writing into `$env` still works. Also the API health check doesn't touch the DB, so the probe filter isn't undermined by pg spans, and memory limits are unchanged (512Mi / 512Mi / 1Gi). `turbo.json`'s strict `passThroughEnv` confirms the rev 9 drafter catch.
-- I read the homelab repo (`/home/nronnei/projects/homelab/apps/travel-agent/network-policy.yaml`) to check A11. I did not check whether `monitoring` or `inkeep` have their own policies.
+- I read the cluster config repo (the cluster config repo's `apps/travel-agent/network-policy.yaml`) to check A11. I did not check whether `monitoring` or `inkeep` have their own policies.
 - Not verified (the plan already defers these): the `@fastify/otel` API, Node 26 hook registration, `nest start --exec` pass-through, Alloy pipelines, and the Anthropic `cost_report` shape.
 
 #### Security review (rev 9) — verdict: APPROVE WITH CHANGES
@@ -1402,16 +1403,16 @@ The two findings below both come from commit 699cc8a. The plan's Context was wri
   - In step 4, add the three DB role passwords to the token search, and add one LangGraph turn (a checkpoint write) and one DB connection failure (for example, start the API before the cluster is ready) to the test window.
   - Optionally, cover the guest-data side explicitly under the rev 5 accepted risk: `db.statement` is parameterized SQL text only.
 
-**S2 [low] The homelab `travel-agent` namespace has a CiliumNetworkPolicy, and Homelab changes doesn't include OTLP egress**
+**S2 [low] The prod `travel-agent` namespace has a CiliumNetworkPolicy, and Cluster-side changes doesn't include OTLP egress**
 - Where:
-  - Design > "Homelab changes (all out of repo; one list)", items 1 to 7;
-  - step 3 "If nothing arrives, work through Homelab changes items 1–2".
-  - Project memory (CNPG) records a CiliumNetworkPolicy on the homelab `travel-agent` namespace, which needed explicit rules for the CNPG pods.
+  - Design > "Cluster-side changes (all out of repo; one list)", items 1 to 7;
+  - step 3 "If nothing arrives, work through Cluster-side changes items 1–2".
+  - Project memory (CNPG) records a CiliumNetworkPolicy on the prod `travel-agent` namespace, which needed explicit rules for the CNPG pods.
 - Issue:
   - If that policy limits egress, the api, langgraph and parlant pods can't reach `monitoring/alloy:4318`. The exporters fail quietly and drop the data.
   - The fix will likely be found under time pressure during rollout, and the easy fix is a broad egress allow.
   - The plan's troubleshooting path (items 1 and 2) points only at Alloy pipelines and filters.
-- Recommendation: add an item to Homelab changes: a CiliumNetworkPolicy egress rule from the travel-agent app pods to `monitoring/alloy` on TCP 4318 only, plus a matching ingress allow on Alloy if the monitoring namespace has a policy. Point the step 3 "nothing arrives" fallback at it.
+- Recommendation: add an item to Cluster-side changes: a CiliumNetworkPolicy egress rule from the travel-agent app pods to `monitoring/alloy` on TCP 4318 only, plus a matching ingress allow on Alloy if the monitoring namespace has a policy. Point the step 3 "nothing arrives" fallback at it.
 
 Notes:
 - Claims I re-checked against the code after 699cc8a:
@@ -1425,7 +1426,7 @@ Notes:
   - This doesn't create a security issue, but the shutdown design and the ⛔ `docker stop` gate should be updated.
 - Not verified, and already deferred by the plan:
   - the `instrumentation-pg` version the new lockfile will resolve;
-  - the homelab CiliumNetworkPolicy egress rules (out of repo);
+  - the cluster CiliumNetworkPolicy egress rules (out of repo);
   - Infinity URL matching;
   - the Grafana auth settings.
 
@@ -1434,7 +1435,7 @@ Notes:
 | ID | Severity | Disposition | Note |
 |---|---|---|---|
 | A10 | high | [accepted] | Preload registers no listener and exposes the SDK shutdown on a global symbol. `flushTelemetry()` runs last in LangGraph's handler and in an API `TelemetryShutdown` hook. ⛔ gates: clean pool close, last batch arrives |
-| A11 | high | [accepted] | Homelab item 8 (narrow egress to Alloy:4318), before rollout step 3. `hubble` check in step 3 fallback and rollout step 4 |
+| A11 | high | [accepted] | cluster change 8 (narrow egress to Alloy:4318), before rollout step 3. `hubble` check in step 3 fallback and rollout step 4 |
 | A12 | medium | [accepted] | Keep `pg` with `requireParentSpan: true`, `enhancedDatabaseReporting` off. ⛔ no boot root spans. Per-turn count recorded. DB passwords in the credential search. Parlant asyncpg noted |
 | A13 | medium | [accepted] | Cold start is an off-vs-on delta ≤ 1 s against a warm DB. Runtime gates run with a DB attached |
 | A14 | medium | [accepted] | Per-workspace `npm ls`, `npm ls @types/pg`, typecheck in every workspace |
@@ -1448,7 +1449,7 @@ Re-review of architecture and security after the token design (revs 11–12).
 
 #### Architecture review (rev 12) — verdict: APPROVE WITH CHANGES
 
-All rev 9 fixes are in the plan text: A10 (no preload listener, `flushTelemetry()` at the end of each app's shutdown), A11 (homelab item 8 plus `hubble` checks), A12 (`pg` kept with `requireParentSpan`), A13 (cold start measured as an off-vs-on difference with a DB attached), A14 (per-workspace `npm ls` and `@types/pg`) and A15. The search-attribution half still matches the code. The new token design from revs 11–12 is the right size and has the right boundaries: bare OpenLLMetry instrumentations, GenAI semantic conventions, and units of tokens rather than USD. I found one wiring bug that would stop all Node traces from exporting, and a few places where the plan's assumptions don't match the installed code.
+All rev 9 fixes are in the plan text: A10 (no preload listener, `flushTelemetry()` at the end of each app's shutdown), A11 (cluster change 8 plus `hubble` checks), A12 (`pg` kept with `requireParentSpan`), A13 (cold start measured as an off-vs-on difference with a DB attached), A14 (per-workspace `npm ls` and `@types/pg`) and A15. The search-attribution half still matches the code. The new token design from revs 11–12 is the right size and has the right boundaries: bare OpenLLMetry instrumentations, GenAI semantic conventions, and units of tokens rather than USD. I found one wiring bug that would stop all Node traces from exporting, and a few places where the plan's assumptions don't match the installed code.
 
 **A16 [high] Adding `GenAiTokenMetrics` as a span processor silently removes the OTLP trace exporter**
 - Where: Design › LLM token usage › Node ("the preload adds a small `SpanProcessor`"); the preload sketch (no `spanProcessors` today); step 3's `OTEL_TRACES_EXPORTER=console` gate. Code: `node_modules/@opentelemetry/sdk-node/build/src/sdk.js:226-228`: `const spanProcessors = this._tracerProviderConfig ? this._tracerProviderConfig.spanProcessors : getSpanProcessorsFromEnv();`
@@ -1536,7 +1537,7 @@ Notes:
 - **Prior findings checked, and the fixes are in the plan:**
   - rev 7 S2–S5: the credential search is a search, rotate-and-purge is in Rollback, `OTEL_PROPAGATORS=tracecontext` is set, the dependency policy is stated, and Inkeep has `service.namespace=inkeep`.
   - rev 9 S1/A12: pg is in Context, `requireParentSpan: true` is set, `enhancedDatabaseReporting` stays off, the step 3 pre-check records the masking, and the DB passwords plus the `postgresql://…:…@` pattern are in the step 4 search.
-  - rev 9 S2/A11: homelab item 8 adds narrow egress to Alloy on TCP 4318, with `hubble` checks.
+  - rev 9 S2/A11: cluster change 8 adds narrow egress to Alloy on TCP 4318, with `hubble` checks.
   - rev 7 S1 (Infinity / admin key) no longer applies, because rev 11 removed the Admin API and the admin key entirely. That removes the plan's highest-privilege secret.
   - Moving the Grafana sign-in check to record-only is reasonable now that no admin key depends on it. It still sets the bound on the rev 5 accepted risk.
 - **Not re-raised:** guest text in Tempo and Loki, including all Inkeep tenants (accepted in rev 5 and rev 9). Inkeep's Vercel AI SDK telemetry records inputs and outputs by default when it is on, so that accepted risk does apply there.
@@ -1592,12 +1593,12 @@ The problems are about step order, one way the collector can double-write a seri
 
 **A25 [medium] Inkeep in the chart is a separate change and should ship as its own PR**
 - Where: Summary, Design › Inkeep in the chart, step 5, and rollout step 5.
-- Issue: the work is four new templates (including a StatefulSet and a PVC), a secret generator, new Tilt resources, two CNPG roles, homelab netpol changes and a prod cutover of the only prod backend. It doesn't depend on the cost work; only step 7's Inkeep span checks depend on it. The branch is already large (a lockfile diff of about 15k lines). Bundling the two ties their rollbacks together and makes review harder. The user asked for this "now", which doesn't require the same PR.
+- Issue: the work is four new templates (including a StatefulSet and a PVC), a secret generator, new Tilt resources, two CNPG roles, cluster netpol changes and a prod cutover of the only prod backend. It doesn't depend on the cost work; only step 7's Inkeep span checks depend on it. The branch is already large (a lockfile diff of about 15k lines). Bundling the two ties their rollbacks together and makes review harder. The user asked for this "now", which doesn't require the same PR.
 - Recommendation: split step 5 into its own plan and PR, merged first (or alongside), with this plan's step 7 Inkeep run gated on it. Keep native templates (open question 1); see A29 for what the shared helper still lacks.
 
 **A26 [medium] The prod Inkeep secret is missing the two tokens Inkeep sends back to the API**
 - Where: Design › Inkeep in the chart › Secrets (the prod key list), and `scripts/generate-inkeep-secret.sh` (to be ported).
-- Issue: `apps/agents/src/projects/travel-agent/tools/web-search.ts:10-16` reads `SEARCH_API_TOKEN` from the Inkeep server's own env, and the context fetcher needs `INTAKE_API_TOKEN`. The homelab generator (`homelab/scripts/generate-inkeep-secret.sh`) writes neither. The plan lists them for dev only. If the prod secret is generated as described, MCP search and the intake context fetch return 401 at cutover. The smoke chat may not catch it if the turn doesn't search.
+- Issue: `apps/agents/src/projects/travel-agent/tools/web-search.ts:10-16` reads `SEARCH_API_TOKEN` from the Inkeep server's own env, and the context fetcher needs `INTAKE_API_TOKEN`. The external install's secret generator (`scripts/generate-inkeep-secret.sh` in the cluster config repo) writes neither. The plan lists them for dev only. If the prod secret is generated as described, MCP search and the intake context fetch return 401 at cutover. The smoke chat may not catch it if the turn doesn't search.
 - Recommendation: have the ported generator copy `SEARCH_API_TOKEN` and `INTAKE_API_TOKEN` from the API's prod Secret (`inkeep.existingSecret`), and never generate them. Add a search-plus-intake turn to the rollout step 5 smoke check.
 
 **A27 [low] The chart's Anthropic content-mode env never reaches the LangGraph dev process**
@@ -1614,11 +1615,11 @@ The problems are about step order, one way the collector can double-write a seri
 **A29 [low] The Inkeep templates need more than `initContainers` from the chart's helpers**
 - Where: step 5 Files, `_helpers.tpl` `travel-agent.deployment` and `travel-agent.postgresConnection`, and `postgres.yaml`.
 - Issue:
-  - Probes in the deployment helper are always `httpGet` on `healthPath`. The homelab runs `agents-api` with `tcpSocket` probes on 3002.
+  - Probes in the deployment helper are always `httpGet` on `healthPath`. The cluster runs `agents-api` with `tcpSocket` probes on 3002.
   - `postgresConnection` emits `<PREFIX>DATABASE_URL` with no `sslmode` plus a `_SSL_ROOT_CERT` var that Inkeep doesn't read.
   - SpiceDB isn't rendered through the helper, so it has to repeat the "secret env first" ordering itself for `$(VAR)` expansion to work.
   - Nothing fails when `inkeep.enabled` is set without `postgres.enabled`, although `postgres.yaml` has exactly that guard for the other backends.
-  - The homelab `inkeep_agents` database was created by a superuser `import`. Fresh Inkeep migrations running as a non-superuser owner (`enableSuperuserAccess: false`) have never been tried, so any `CREATE EXTENSION` will fail.
+  - The cluster `inkeep_agents` database was created by a superuser `import`. Fresh Inkeep migrations running as a non-superuser owner (`enableSuperuserAccess: false`) have never been tried, so any `CREATE EXTENSION` will fail.
 - Recommendation:
   - Add a probe override (or verify an HTTP health path) to the helper.
   - Add a URL-query parameter to `postgresConnection`.
@@ -1641,7 +1642,7 @@ The problems are about step order, one way the collector can double-write a seri
 - Where:
   - The step 3 helm gate still passes `otel.endpoint`, which is renamed in step 6.
   - The front matter still says `reviewed: rev 12`.
-  - Homelab item 1 may already be what the central Alloy does by default: k8sattributes with no `pod_association` checks the `k8s.pod.ip` resource attribute before the connection IP. Keep the explicit rules, but let the step 6 gate show whether they changed anything.
+  - cluster change 1 may already be what the central Alloy does by default: k8sattributes with no `pod_association` checks the `k8s.pod.ip` resource attribute before the connection IP. Keep the explicit rules, but let the step 6 gate show whether they changed anything.
 
 **Prior findings**
 - Rev 12 A16, A17, A21, A22, S2 and S3 no longer apply once the rev 13 code is removed (see A23 for when).
