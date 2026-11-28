@@ -959,6 +959,16 @@ None. Rev 15 (user): Q1 native chart templates for Inkeep; Q2 prod cutover witho
 - rev 15: applied the rev 14 architecture review: rev 13 removal moved to step 6a before any gate (A23); project Alloy `Recreate` + storage `emptyDir` (A24); Inkeep as its own PR, merged first (A25); prod Inkeep secret copies `SEARCH_API_TOKEN`/`INTAKE_API_TOKEN` and the smoke turn searches (A26); `ANTHROPIC_OPEN_TELEMETRY*` passthrough (A27); Parlant's scope and `input` filled in, wider fixture (A28); helper probe override, URL params, `postgres.enabled` guard, extension pre-check, service-name fallback (A29); `inkeep.server.*` values (A30); Tilt push deps, keep/idle handling, port-forward URLs (A31); stale text (A32).
 - rev 15: **approved** by the user (2026-11-26), with Q1 and Q2 answered as recommended. Status back to implementing; base unchanged. The Inkeep PR (step 5) is built on its own branch, `feat/inkeep-in-chart`, from `main`.
 
+## Verification
+- plan (2026-11-28): pass. `npm run lint` (7 tasks), `npm run typecheck` (6), `npm test` (web 46, langgraph 61, api 99), API e2e (12), Parlant pytest (47) and ruff, `helm lint` and the default and all-options renders, and `deploy/alloy/test/token-rule.sh` all pass. The diff against `main` (51 files) maps to steps 1–10 plus the recorded deviations; nothing unaccounted for.
+- Open items (rollout or out of repo, for the user to accept):
+  1. **RSS on the runtime images** (step 3 bar): dev images were already over 70% with OTEL off; LangGraph reached 87% of 512 MiB with OTEL on in dev. Measure in rollout step 4; raise the limit or use the allow-list fallback if needed.
+  2. **API autocannon p99 run** and an **exact-value secret search**: not run, because the permission check blocked reading tokens from `.env`/Secrets; the pattern-based credential search passed.
+  3. **Dashboard not yet viewed in Grafana:** its queries were run against Prometheus; provisioning is homelab item 5.
+  4. **Homelab changes:** item 3 (prod network policy: collector → central Alloy on 4318; Inkeep → Anthropic) before rollout; item 1 (explicit `pod_association`) is optional, since the central default already matches on `k8s.pod.ip`; item 5 (dashboard); item 6 (prod Inkeep cutover).
+  5. **First-sample undercount** on new token series: accepted as small unless the user wants Prometheus' created-timestamp zero injection (a central change).
+
+
 ## Review log
 
 ### Revision 7
