@@ -179,6 +179,7 @@ None. Rev 2 (user): Q1 the dashboard ships from the chart; Q2 retire the homelab
 
 ## Implementation notes
 - **Step 1 (2026-11-28):** the dashboard moved to `deploy/helm/travel-agent/dashboards/travel-agent-costs.json`; `templates/grafana-dashboard.yaml` renders the `grafana_dashboard` ConfigMap (folder annotation from `grafana.dashboard.folder`) when `grafana.dashboard.enabled`. Verified: nothing rendered by default; with it on, the label, annotation and the embedded JSON parse (uid `travel-agent-costs`, 7 panels); the packaged chart includes `dashboards/`; `helm lint` passes. `deploy/grafana/README.md` and `docs/agent-frameworks.md` point at the new location.
+- **Step 2:** branch pushed; PR #7 opened (https://github.com/nronnei/travel-agent-demo/pull/7). Merge is the user's.
 
 ## Appendix: rollout monitoring prompt
 
