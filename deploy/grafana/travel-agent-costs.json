@@ -1,0 +1,407 @@
+{
+  "title": "Travel agent: cost by backend",
+  "uid": "travel-agent-costs",
+  "tags": [
+    "travel-agent",
+    "cost"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "ds",
+        "label": "Prometheus",
+        "query": "prometheus",
+        "current": {
+          "text": "prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0
+      },
+      {
+        "type": "custom",
+        "name": "ns",
+        "label": "Environment",
+        "query": "travel-agent,travel-agent-dev",
+        "current": {
+          "text": "travel-agent",
+          "value": "travel-agent"
+        },
+        "options": [
+          {
+            "text": "travel-agent",
+            "value": "travel-agent",
+            "selected": true
+          },
+          {
+            "text": "travel-agent-dev",
+            "value": "travel-agent-dev",
+            "selected": false
+          }
+        ],
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "text",
+      "title": "How to read this",
+      "options": {
+        "mode": "markdown",
+        "content": "Cost per chat backend in **tokens and Tavily credits** (no USD). Pick the environment with **ns**.\n\n- **LLM tokens** come from the project Alloy's token rule over each backend's `gen_ai` spans; *input* includes cache reads and writes. Totals are approximate: Prometheus' `increase()` extrapolates at the range edges, and a brand-new series loses its first data point.\n- **Tavily credits** are what Tavily reports per search: a **lower bound** (timed-out calls may still be billed). Cross-check in Tavily's dashboard, filtered by project `travel-agent-<backend>`.\n- Search **limits are shared** across backends, so a `limited` outcome during a comparison is a stack limit, not a framework failure.\n- Traces: [Tempo, this namespace](/explore?left=%7B%22datasource%22:%22tempo%22,%22queries%22:%5B%7B%22queryType%22:%22traceql%22,%22query%22:%22%7Bresource.service.namespace%3D%5C%22$ns%5C%22%7D%22%7D%5D%7D).\n\nHow each backend is measured: `docs/agent-frameworks.md`, \"Cost\"."
+      },
+      "id": 1,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 6
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      }
+    },
+    {
+      "type": "table",
+      "title": "Cost by backend (selected range)",
+      "description": "One row per backend, zeros included. Tokens approximate; credits a lower bound.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "(sum by (backend) (label_replace(increase(travel_agent_llm_tokens{job=~\"$ns/.*\", gen_ai_token_type=\"input\"}[$__range]), \"backend\", \"$1\", \"job\", \".*/travel-agent-(.+)\"))) or on (backend) (label_replace(vector(0), \"backend\", \"inkeep\", \"\", \"\") or label_replace(vector(0), \"backend\", \"parlant\", \"\", \"\") or label_replace(vector(0), \"backend\", \"langgraph\", \"\", \"\"))",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "(sum by (backend) (label_replace(increase(travel_agent_llm_tokens{job=~\"$ns/.*\", gen_ai_token_type=\"output\"}[$__range]), \"backend\", \"$1\", \"job\", \".*/travel-agent-(.+)\"))) or on (backend) (label_replace(vector(0), \"backend\", \"inkeep\", \"\", \"\") or label_replace(vector(0), \"backend\", \"parlant\", \"\", \"\") or label_replace(vector(0), \"backend\", \"langgraph\", \"\", \"\"))",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "C",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "(sum by (backend) (label_replace(increase(travel_agent_search_credits_total{job=\"$ns/travel-agent-api\", client!=\"unknown\"}[$__range]), \"backend\", \"$1\", \"client\", \"(.+)\"))) or on (backend) (label_replace(vector(0), \"backend\", \"inkeep\", \"\", \"\") or label_replace(vector(0), \"backend\", \"parlant\", \"\", \"\") or label_replace(vector(0), \"backend\", \"langgraph\", \"\", \"\"))",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "D",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "(sum by (backend) (label_replace(increase(travel_agent_search_requests_total{job=\"$ns/travel-agent-api\", client!=\"unknown\", outcome=~\"ok|cached\"}[$__range]), \"backend\", \"$1\", \"client\", \"(.+)\"))) or on (backend) (label_replace(vector(0), \"backend\", \"inkeep\", \"\", \"\") or label_replace(vector(0), \"backend\", \"parlant\", \"\", \"\") or label_replace(vector(0), \"backend\", \"langgraph\", \"\", \"\"))",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value #A": "Input tokens",
+              "Value #B": "Output tokens",
+              "Value #C": "Tavily credits",
+              "Value #D": "Searches",
+              "backend": "Backend"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Backend"
+          }
+        ]
+      },
+      "id": 2,
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Tokens by backend and type (selected range)",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "sum by (backend, gen_ai_token_type) (label_replace(increase(travel_agent_llm_tokens{job=~\"$ns/.*\"}[$__range]), \"backend\", \"$1\", \"job\", \".*/travel-agent-(.+)\"))",
+          "legendFormat": "{{backend}} {{gen_ai_token_type}}",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "gen_ai_token_type",
+            "rowField": "backend",
+            "valueField": "Value"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "stacking": "normal",
+        "xField": "backend\\gen_ai_token_type",
+        "legend": {
+          "showLegend": true
+        }
+      },
+      "id": 3,
+      "gridPos": {
+        "x": 12,
+        "y": 6,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tokens over time by backend and model",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "sum by (backend, gen_ai_response_model) (label_replace(increase(travel_agent_llm_tokens{job=~\"$ns/.*\"}[$__rate_interval]), \"backend\", \"$1\", \"job\", \".*/travel-agent-(.+)\"))",
+          "legendFormat": "{{backend}} \u00b7 {{gen_ai_response_model}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "id": 4,
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Tavily credits over time by backend (lower bound)",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "sum by (backend) (label_replace(increase(travel_agent_search_credits_total{job=\"$ns/travel-agent-api\", client!=\"unknown\"}[$__rate_interval]), \"backend\", \"$1\", \"client\", \"(.+)\"))",
+          "legendFormat": "{{backend}}",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "stacking": {
+              "mode": "normal"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "id": 5,
+      "gridPos": {
+        "x": 12,
+        "y": 14,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      }
+    },
+    {
+      "type": "barchart",
+      "title": "Searches by backend and outcome (selected range)",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "sum by (backend, outcome) (label_replace(increase(travel_agent_search_requests_total{job=\"$ns/travel-agent-api\", client!=\"unknown\"}[$__range]), \"backend\", \"$1\", \"client\", \"(.+)\"))",
+          "legendFormat": "",
+          "range": false,
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "groupingToMatrix",
+          "options": {
+            "columnField": "outcome",
+            "rowField": "backend",
+            "valueField": "Value"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 0,
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "stacking": "normal",
+        "xField": "backend\\outcome",
+        "legend": {
+          "showLegend": true
+        }
+      },
+      "id": 6,
+      "gridPos": {
+        "x": 0,
+        "y": 22,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Search cache hit ratio by backend",
+      "description": "Cached \u00f7 (ok + cached). The cache is per backend.",
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "sum by (backend) (label_replace(increase(travel_agent_search_requests_total{job=\"$ns/travel-agent-api\", client!=\"unknown\", outcome=\"cached\"}[$__range]), \"backend\", \"$1\", \"client\", \"(.+)\")) / sum by (backend) (label_replace(increase(travel_agent_search_requests_total{job=\"$ns/travel-agent-api\", client!=\"unknown\", outcome=~\"ok|cached\"}[$__range]), \"backend\", \"$1\", \"client\", \"(.+)\"))",
+          "legendFormat": "{{backend}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 0,
+          "noValue": "no searches"
+        },
+        "overrides": []
+      },
+      "id": 7,
+      "gridPos": {
+        "x": 12,
+        "y": 22,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      }
+    }
+  ],
+  "annotations": {
+    "list": []
+  }
+}

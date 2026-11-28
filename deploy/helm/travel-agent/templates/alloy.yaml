@@ -171,8 +171,24 @@ otelcol.receiver.otlp "apps" {
 otelcol.processor.k8sattributes "ip" {
   passthrough = true
   output {
-    traces  = [otelcol.processor.batch.out.input]
+    traces  = [otelcol.processor.transform.genai.input]
     metrics = [otelcol.processor.batch.out.input]
+  }
+}
+
+// One provider label for every backend. The Anthropic SDKs set gen_ai.provider.name;
+// Inkeep's AI SDK spans only say gen_ai.system ("anthropic.messages"), so fill it in.
+// Extend the map when a provider is added (e.g. the AWS SDK's Bedrock spans).
+otelcol.processor.transform "genai" {
+  error_mode = "ignore"
+  trace_statements {
+    context    = "span"
+    statements = [
+      `set(attributes["gen_ai.provider.name"], "anthropic") where attributes["gen_ai.provider.name"] == nil and IsMatch(attributes["gen_ai.system"], "^anthropic")`,
+    ]
+  }
+  output {
+    traces = [otelcol.processor.batch.out.input]
   }
 }
 
